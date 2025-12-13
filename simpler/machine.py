@@ -9,12 +9,55 @@ from ctypes import (
     cast,
     sizeof,
 )
+import subprocess
+import sysconfig
+import tempfile
+import shutil
 from pathlib import Path
 
 
-# Resolve library path
-lib_path = Path(__file__).resolve().parent.parent / "libmachine.dylib"  # Linux: libmachine.so
-lib = CDLL(str(lib_path))
+ROOT = Path(__file__).resolve().parent.parent
+BUNDLE_DIR = ROOT / "build"  # where we store copied libs for loading
+SHLIB_SUFFIX = sysconfig.get_config_var("SHLIB_SUFFIX") or ".so"
+TARGET_SOURCES = {
+    "machine": ROOT / "src" / "machine",
+    "addworker": ROOT / "src" / "worker" / "add",
+}
+
+
+def ensure_target(target: str) -> Path:
+    """Configure/build a single target in a temp dir, copy the .so/.dylib locally."""
+    source_dir = TARGET_SOURCES[target]
+    temp_build = Path(tempfile.gettempdir()) / f"simpler_{target}_build"
+    temp_build.mkdir(parents=True, exist_ok=True)
+    cache = temp_build / "CMakeCache.txt"
+    if not cache.exists():
+        subprocess.check_call(["cmake", "-S", str(source_dir), "-B", str(temp_build)])
+    subprocess.check_call(["cmake", "--build", str(temp_build)])
+    suffixes = []
+    suffixes.append(SHLIB_SUFFIX)
+    for alt in (".dylib", ".so", ".dll"):
+        if alt not in suffixes:
+            suffixes.append(alt)
+    built_lib: Path | None = None
+    for suf in suffixes:
+        candidate = temp_build / f"lib{target}{suf}"
+        if candidate.exists():
+            built_lib = candidate
+            break
+    if built_lib is None:
+        raise FileNotFoundError(f"built library for {target} not found in {temp_build}")
+
+    dest = BUNDLE_DIR / built_lib.name
+    BUNDLE_DIR.mkdir(exist_ok=True)
+    if not dest.exists() or built_lib.stat().st_mtime > dest.stat().st_mtime:
+        shutil.copy2(built_lib, dest)
+    return dest
+
+
+# JIT build only what is needed.
+lib_machine_path = ensure_target("machine")
+lib = CDLL(str(lib_machine_path))
 
 
 class MachineHandle(Structure):
@@ -56,7 +99,9 @@ def main() -> None:
     machine = lib.CreateMachine()
     # Prepare payload buffer owned by caller.
     payload = AddPayload(3, 4, 0)
-    lib_path_bytes = b"libadd.dylib"
+    # Build worker on demand.
+    lib_add_path = ensure_target("addworker")
+    lib_path_bytes = str(lib_add_path).encode()
     entry_bytes = b"AddWorker"
     lib_path_c = c_char_p(lib_path_bytes)
     entry_c = c_char_p(entry_bytes)
