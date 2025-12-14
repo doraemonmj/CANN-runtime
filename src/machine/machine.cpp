@@ -5,12 +5,12 @@
 #include <string>
 
 Machine::Machine() {
-    worker_thread_ = std::thread(&Machine::WorkerLoop, this);
+    worker_thread_ = platform::Thread(&Machine::WorkerLoop, this);
 }
 
 Machine::~Machine() {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<platform::Mutex> lock(mutex_);
         stopping_ = true;
     }
     dispatch_cv_.notify_all();
@@ -20,23 +20,23 @@ Machine::~Machine() {
 }
 
 void* Machine::Malloc(size_t size) {
-    return std::malloc(size);
+    return platform::Alloc(size);
 }
 
 void Machine::Free(void* ptr) {
-    std::free(ptr);
+    platform::Free(ptr);
 }
 
 void Machine::PushTask(const Task& task) {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<platform::Mutex> lock(mutex_);
         dispatch_queue_.push(task);
     }
     dispatch_cv_.notify_one();
 }
 
 bool Machine::PopTask(Task& task) {
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<platform::Mutex> lock(mutex_);
     finish_cv_.wait(lock, [&] { return stopping_ || !finish_queue_.empty(); });
     if (finish_queue_.empty()) {
         return false;
@@ -50,7 +50,7 @@ void Machine::WorkerLoop() {
     while (true) {
         Task task;
         {
-            std::unique_lock<std::mutex> lock(mutex_);
+            std::unique_lock<platform::Mutex> lock(mutex_);
             dispatch_cv_.wait(lock, [&] { return stopping_ || !dispatch_queue_.empty(); });
             if (dispatch_queue_.empty()) {
                 return;
@@ -84,7 +84,7 @@ void Machine::WorkerLoop() {
         }
 
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<platform::Mutex> lock(mutex_);
             finish_queue_.push(task);
         }
         finish_cv_.notify_one();

@@ -30,9 +30,10 @@ def ensure_target(target: str) -> Path:
     source_dir = TARGET_SOURCES[target]
     temp_build = Path(tempfile.gettempdir()) / f"simpler_{target}_build"
     temp_build.mkdir(parents=True, exist_ok=True)
-    cache = temp_build / "CMakeCache.txt"
-    if not cache.exists():
-        subprocess.check_call(["cmake", "-S", str(source_dir), "-B", str(temp_build)])
+    args = ["cmake", "-S", str(source_dir), "-B", str(temp_build)]
+    if target == "machine":
+        args.append("-DMACHINE_PLATFORM=host")
+    subprocess.check_call(args)
     subprocess.check_call(["cmake", "--build", str(temp_build)])
     suffixes = []
     suffixes.append(SHLIB_SUFFIX)
