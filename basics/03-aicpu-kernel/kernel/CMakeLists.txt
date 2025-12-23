@@ -15,7 +15,7 @@ set(CMAKE_C_COMPILER "${ASCEND_CANN_PACKAGE_PATH}/toolkit/toolchain/hcc/bin/aarc
 set(CMAKE_CXX_COMPILER "${ASCEND_CANN_PACKAGE_PATH}/toolkit/toolchain/hcc/bin/aarch64-target-linux-gnu-g++")
 
 add_library(tile_fwk_server SHARED)
-target_sources(tile_fwk_server PRIVATE hello_world.cpp)
+target_sources(tile_fwk_server PRIVATE hello_world.cpp device_log.cpp)
 
 target_compile_options(tile_fwk_server
         PRIVATE

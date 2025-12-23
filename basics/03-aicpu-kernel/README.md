@@ -99,6 +99,20 @@ The launcher will:
 6. Launch the init and main kernels
 7. Clean up resources
 
+## Logging
+
+The kernel uses PLOG (Platform Log) for device-side logging. Log files are written to:
+
+```
+~/ascend/log/debug/device-<device_id>/
+```
+
+Where `<device_id>` is the device ID used when launching the kernel. For example:
+- Device 0: `~/ascend/log/debug/device-0/`
+- Device 6: `~/ascend/log/debug/device-6/`
+
+The kernel logs messages using `DEV_INFO`, `DEV_DEBUG`, `DEV_WARN`, and `DEV_ERROR` macros defined in `kernel/device_log.h`. These logs are written to the device log files and can be viewed to debug kernel execution.
+
 ## Key Concepts
 
 ### Offset Requirements
