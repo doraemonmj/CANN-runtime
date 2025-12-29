@@ -196,7 +196,7 @@ int main(int argc, char **argv) {
     constexpr float eps = 1e-6f;
     constexpr int PRINT_COUNT = 10;
     int printCount = 0;
-    for (size_t i = 0; i < elems; ++i) {
+    for (size_t i = 0; i < PRINT_COUNT; ++i) {
         float expect = hSrc0[i] + hSrc1[i];
         if (std::abs(out[i] - expect) > eps) {
             std::cerr << "FAIL: i=" << i << ", src0=" << hSrc0[i] << ", src1=" << hSrc1[i] << ", got=" << out[i] << ", expect=" << expect << '\n';

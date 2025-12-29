@@ -1,0 +1,7 @@
+site_name: CANN Runtime 开发指南
+site_description: 昇腾 AI 处理器运行时库开发文档
+site_author: Ascend Developer Team
+
+theme:
+  name: material
+  language: zh

@@ -22,25 +22,24 @@
 #define KERNEL_ENTRY(x) x##_0_mix_aic
 #endif
 
-#ifdef __AIV__
-#define blockIdx blockIdx_aiv
-#else
-#define blockIdx blockIdx_aic
-#endif
-
-[[block_local]] int blockIdx;
-
-
+struct Handshake {
+    volatile uint32_t aicpu_ready;
+    volatile uint32_t aicore_done;
+};
 /**
  * Minimal kernel entry point
  *
  * This function is called by the runtime when kernel is launched.
  */
-extern "C" __global__ __aicore__ void KERNEL_ENTRY(aicore_kernel)(__gm__ uint8_t *Out, int64_t Stride) {
+// const uint32_t MAX_WAIT = 1000000;
+extern "C" __global__ __aicore__ void KERNEL_ENTRY(aicore_kernel)(__gm__ struct Handshake* hank) {
+
+    while (hank->aicpu_ready == 0) {
+        dcci(hank, ENTIRE_DATA_CACHE, CACHELINE_OUT);
+    }
 #ifdef __AIV__
-    blockIdx = get_block_idx() * get_subblockdim() + get_subblockid() + get_block_num();
+    hank->aicore_done = 1;
 #else
-    blockIdx = get_block_idx();
+    hank->aicore_done = 2;
 #endif
-    Out[blockIdx * Stride] = static_cast<uint8_t>(blockIdx);//把id写到指定的位置
 }

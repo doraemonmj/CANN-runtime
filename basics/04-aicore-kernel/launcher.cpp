@@ -14,9 +14,9 @@
 
 struct DataPerCore {
     int8_t coreId;
-} __attribute__((aligned(DAV_C220_CACHELINE_SIZE)));
+} __attribute__((aligned(DAV_C220_CACHELINE_SIZE)));//强制内存按64字节对齐
 
-static int ReadFile(const std::string &path, std::vector<uint8_t> &buf) {
+static int ReadFile(const std::string &path, std::vector<uint8_t> &buf) {//以二进制方式完整读取一个文件的内容到buf
     std::ifstream fs(path, std::ios::binary | std::ios::ate);
     if (!fs.is_open()) {
         std::cerr << "无法打开内核文件: " << path << '\n';
@@ -88,8 +88,8 @@ int main(int argc, char **argv) {
     }
 
     // the number of 1c2v aicore, 4 means 4 cube cores and 8 vec cores
-    constexpr uint32_t blocks = 4;
-    constexpr uint32_t coresPerBlock = 3;
+    constexpr uint32_t blocks = 4; //每个 block 通常由一个物理 core 执行
+    constexpr uint32_t coresPerBlock = 3;   // 每个 block 有 3 个逻辑 core，多了会报错，对应1c2v
     constexpr size_t stride = sizeof(DataPerCore);
     void *dOut = nullptr;
     size_t bytes = static_cast<size_t>(blocks) * coresPerBlock * stride;
@@ -147,6 +147,7 @@ int main(int argc, char **argv) {
 
     std::vector<DataPerCore> out(blocks * coresPerBlock);
     rc = rtMemcpy(out.data(), bytes, dOut, bytes, RT_MEMCPY_DEVICE_TO_HOST);
+
     if (rc != RT_ERROR_NONE) {
         std::cerr << "rtMemcpy D2H失败: " << rc << '\n';
         rtFree(dOut);
