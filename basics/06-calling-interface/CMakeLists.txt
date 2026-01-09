@@ -4,6 +4,9 @@ project(calling_interface)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Add include directory to include path
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+
 # Build add_kernel as shared library
 add_library(add_kernel SHARED
     kernel/add_kernel.cpp
@@ -34,4 +37,3 @@ set_target_properties(add_kernel PROPERTIES
 set_target_properties(mul_kernel PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
-
