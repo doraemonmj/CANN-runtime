@@ -10,5 +10,7 @@ python:
   install:
     - requirements: requirements.txt
 
-mkdocs:
-  configuration: mkdocs.yml
+# Sphinx 配置
+sphinx:
+  configuration: docs_sphinx/source/conf.py  # ← 指向你的 conf.py 路径
+ 

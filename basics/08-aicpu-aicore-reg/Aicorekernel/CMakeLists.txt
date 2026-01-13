@@ -1,0 +1,28 @@
+cmake_minimum_required(VERSION 3.16.3)
+
+set(BISHENG_COMPILER "${ASCEND_HOME_PATH}/compiler/ccec_compiler/bin/bisheng")
+set(BISHENG_LD "${ASCEND_HOME_PATH}/compiler/ccec_compiler/bin/ld.lld")
+
+set(AICORE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/kernel.cpp)
+set(AICORE_OBJ_AIV ${CMAKE_CURRENT_BINARY_DIR}/kernel_aiv.o)
+set(AICORE_OBJ_AIC ${CMAKE_CURRENT_BINARY_DIR}/kernel_aic.o)
+set(AICORE_O ${CMAKE_CURRENT_BINARY_DIR}/kernel.o)
+
+set(AI_CORE_FLAGS
+    "-c -O3 -g -x cce -Wall -Werror -std=c++17 \
+    --cce-aicore-only \
+    -mllvm -cce-aicore-stack-size=0x8000 \
+    -mllvm -cce-aicore-function-stack-size=0x8000 \
+    -mllvm -cce-aicore-record-overflow=false \
+    -mllvm -cce-aicore-addr-transform \
+    -mllvm -cce-aicore-dcci-insert-for-scalar=false"
+)
+separate_arguments(AI_CORE_FLAGS)
+
+add_custom_target(kernel_obj ALL DEPENDS ${AICORE_SRC}
+    COMMAND ${BISHENG_COMPILER} ${AI_CORE_FLAGS} -D__AIC__ --cce-aicore-arch=dav-c220-cube -o ${AICORE_OBJ_AIC} ${AICORE_SRC}
+    COMMAND ${BISHENG_COMPILER} ${AI_CORE_FLAGS} -D__AIV__ --cce-aicore-arch=dav-c220-vec -o ${AICORE_OBJ_AIV} ${AICORE_SRC}
+    COMMAND ${BISHENG_LD} -m aicorelinux -Ttext=0 -static -n -o ${AICORE_O} ${AICORE_OBJ_AIC} ${AICORE_OBJ_AIV}
+    BYPRODUCTS ${AICORE_OBJ_AIC} ${AICORE_OBJ_AIV} ${AICORE_O}
+    COMMENT "Build kernel (AIC + AIV) with bisheng/ld.lld"
+)
