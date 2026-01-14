@@ -10,6 +10,8 @@ CANN runtime 开发指南
 
 同时，通过一系列简明实用的代码示例，直观展示从主机端提交任务到昇腾 AI 芯片执行的完整流程，帮助开发者快速掌握底层运行时编程模型。
 
+Github: https://github.com/doraemonmj/CANN-runtime
+
 .. toctree::
    :maxdepth: 2
    :caption: 引言
