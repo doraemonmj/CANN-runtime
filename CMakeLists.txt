@@ -73,4 +73,6 @@ endif()
 # Examples
 if(BUILD_EXAMPLES)
     add_subdirectory(examples/01-device-query)
+    add_subdirectory(examples/02-memory)
+    add_subdirectory(examples/03-stream)
 endif()
