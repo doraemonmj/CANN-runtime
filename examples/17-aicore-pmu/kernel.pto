@@ -1,0 +1,353 @@
+# PTO-ISA Kernel: PMU (Performance Monitoring Unit) Usage
+#
+# Demonstrates hardware performance counter usage for profiling
+
+# ============================================================
+# Kernel: Basic PMU Measurement
+# ============================================================
+
+.kernel pmu_basic
+.args {
+    input:   ptr<f32>
+    output:  ptr<f32>
+    count:   i32
+    metrics: ptr<i64>    # Output: [cycles, vec_cycles, dma_bytes]
+}
+
+.const UB_INPUT  = 0
+.const UB_OUTPUT = 65536
+
+SCALAR n = args.count
+
+# ========================================
+# Start PMU counters
+# ========================================
+PMU_RESET                        # Clear all counters
+PMU_START CYCLES, VEC_CYCLES, DMA_LOAD_B, DMA_STORE_B
+
+# ========================================
+# Kernel body (to be measured)
+# ========================================
+
+# Load data
+DMA_LOAD UB[UB_INPUT : UB_INPUT + n*4], GM[args.input], n * 4
+WAIT_DMA
+
+# Vector operations
+VMULS UB[UB_OUTPUT : UB_OUTPUT + n*4], UB[UB_INPUT : UB_INPUT + n*4], 2.0
+WAIT_VEC
+
+VADDS UB[UB_OUTPUT : UB_OUTPUT + n*4], UB[UB_OUTPUT : UB_OUTPUT + n*4], 1.0
+WAIT_VEC
+
+# Store result
+DMA_STORE GM[args.output], UB[UB_OUTPUT : UB_OUTPUT + n*4], n * 4
+WAIT_DMA
+
+# ========================================
+# Stop and read PMU counters
+# ========================================
+PMU_STOP
+
+SCALAR cycles, vec_cycles, load_b, store_b
+PMU_READ cycles, CYCLES
+PMU_READ vec_cycles, VEC_CYCLES
+PMU_READ load_b, DMA_LOAD_B
+PMU_READ store_b, DMA_STORE_B
+
+# Store metrics for host to read
+SCALAR dma_bytes = load_b + store_b
+STORE GM[args.metrics + 0], cycles
+STORE GM[args.metrics + 8], vec_cycles
+STORE GM[args.metrics + 16], dma_bytes
+
+RET
+
+
+# ============================================================
+# Kernel: Detailed GEMM Profiling
+# ============================================================
+
+.kernel pmu_gemm_profile
+.args {
+    A:       ptr<f16>
+    B:       ptr<f16>
+    C:       ptr<f16>
+    M:       i32
+    K:       i32
+    N:       i32
+    metrics: ptr<i64>    # [total_cycles, cube_cycles, dma_load, dma_store,
+                         #  mte_cycles, stalls]
+}
+
+.const TILE_M = 128
+.const TILE_K = 64
+.const TILE_N = 128
+
+SCALAR total_m = args.M
+SCALAR total_k = args.K
+SCALAR total_n = args.N
+
+# ========================================
+# Initialize PMU
+# ========================================
+PMU_RESET
+PMU_START CYCLES, CUBE_CYCLES, DMA_LOAD_B, DMA_STORE_B, MTE_CYCLES, STALLS
+
+# ========================================
+# GEMM main loop (tiled)
+# ========================================
+SCALAR m_tile = 0
+.loop_m:
+    CMP m_tile, total_m
+    JGE .done_m
+
+    SCALAR n_tile = 0
+    .loop_n:
+        CMP n_tile, total_n
+        JGE .done_n
+
+        MMAD_CLEAR L0C
+
+        SCALAR k_tile = 0
+        .loop_k:
+            CMP k_tile, total_k
+            JGE .done_k
+
+            SCALAR tile_m = MIN(TILE_M, total_m - m_tile)
+            SCALAR tile_k = MIN(TILE_K, total_k - k_tile)
+            SCALAR tile_n = MIN(TILE_N, total_n - n_tile)
+
+            # Load A tile
+            SCALAR a_offset = (m_tile * total_k + k_tile) * 2
+            DMA_LOAD_L0A L0A, GM[args.A + a_offset], tile_m, tile_k, total_k
+            WAIT_DMA
+
+            # Load B tile
+            SCALAR b_offset = (k_tile * total_n + n_tile) * 2
+            DMA_LOAD_L0B L0B, GM[args.B + b_offset], tile_k, tile_n, total_n
+            WAIT_DMA
+
+            # MMAD
+            MMAD L0C, L0A, L0B, tile_m, tile_k, tile_n
+            WAIT_CUBE
+
+            ADD k_tile, k_tile, TILE_K
+            JMP .loop_k
+
+        .done_k:
+
+        # Store C tile
+        SCALAR tile_m = MIN(TILE_M, total_m - m_tile)
+        SCALAR tile_n = MIN(TILE_N, total_n - n_tile)
+        SCALAR c_offset = (m_tile * total_n + n_tile) * 2
+        DMA_STORE_L0C GM[args.C + c_offset], L0C, tile_m, tile_n, total_n
+        WAIT_DMA
+
+        ADD n_tile, n_tile, TILE_N
+        JMP .loop_n
+
+    .done_n:
+
+    ADD m_tile, m_tile, TILE_M
+    JMP .loop_m
+
+.done_m:
+
+# ========================================
+# Read PMU counters
+# ========================================
+PMU_STOP
+
+SCALAR total_cycles, cube_cycles, dma_load, dma_store, mte_cycles, stalls
+PMU_READ total_cycles, CYCLES
+PMU_READ cube_cycles, CUBE_CYCLES
+PMU_READ dma_load, DMA_LOAD_B
+PMU_READ dma_store, DMA_STORE_B
+PMU_READ mte_cycles, MTE_CYCLES
+PMU_READ stalls, STALLS
+
+# Store for host analysis
+STORE GM[args.metrics + 0], total_cycles
+STORE GM[args.metrics + 8], cube_cycles
+STORE GM[args.metrics + 16], dma_load
+STORE GM[args.metrics + 24], dma_store
+STORE GM[args.metrics + 32], mte_cycles
+STORE GM[args.metrics + 40], stalls
+
+RET
+
+
+# ============================================================
+# Kernel: Section-by-Section Profiling
+# ============================================================
+# Profile individual sections of a kernel
+
+.kernel pmu_sections
+.args {
+    data:    ptr<f32>
+    count:   i32
+    metrics: ptr<i64>    # [load_cycles, compute_cycles, store_cycles]
+}
+
+.const UB_BUF = 0
+SCALAR n = args.count
+
+# ========================================
+# Section 1: DMA Load
+# ========================================
+PMU_RESET
+PMU_START CYCLES
+
+DMA_LOAD UB[UB_BUF : UB_BUF + n*4], GM[args.data], n * 4
+WAIT_DMA
+
+PMU_STOP
+SCALAR load_cycles
+PMU_READ load_cycles, CYCLES
+STORE GM[args.metrics + 0], load_cycles
+
+# ========================================
+# Section 2: Compute
+# ========================================
+PMU_RESET
+PMU_START CYCLES
+
+VMULS UB[UB_BUF : UB_BUF + n*4], UB[UB_BUF : UB_BUF + n*4], 2.0
+WAIT_VEC
+VADDS UB[UB_BUF : UB_BUF + n*4], UB[UB_BUF : UB_BUF + n*4], 1.0
+WAIT_VEC
+VRELU UB[UB_BUF : UB_BUF + n*4], UB[UB_BUF : UB_BUF + n*4]
+WAIT_VEC
+
+PMU_STOP
+SCALAR compute_cycles
+PMU_READ compute_cycles, CYCLES
+STORE GM[args.metrics + 8], compute_cycles
+
+# ========================================
+# Section 3: DMA Store
+# ========================================
+PMU_RESET
+PMU_START CYCLES
+
+DMA_STORE GM[args.data], UB[UB_BUF : UB_BUF + n*4], n * 4
+WAIT_DMA
+
+PMU_STOP
+SCALAR store_cycles
+PMU_READ store_cycles, CYCLES
+STORE GM[args.metrics + 16], store_cycles
+
+RET
+
+
+# ============================================================
+# Kernel: Bandwidth Test
+# ============================================================
+# Measure peak achievable memory bandwidth
+
+.kernel pmu_bandwidth_test
+.args {
+    buffer:  ptr<f32>    # Test buffer
+    size:    i32         # Size in floats
+    metrics: ptr<i64>    # [read_cycles, read_bytes, write_cycles, write_bytes]
+}
+
+.const UB_BUF = 0
+.const TILE_SIZE = 65536  # 64K floats = 256KB (fits UB)
+
+SCALAR total_size = args.size
+
+# ========================================
+# Test Read Bandwidth
+# ========================================
+PMU_RESET
+PMU_START CYCLES, DMA_LOAD_B
+
+SCALAR offset = 0
+.read_loop:
+    CMP offset, total_size
+    JGE .read_done
+
+    SCALAR tile_n = MIN(TILE_SIZE, total_size - offset)
+    SCALAR addr = args.buffer + offset * 4
+
+    DMA_LOAD UB[UB_BUF : UB_BUF + tile_n*4], GM[addr], tile_n * 4
+    WAIT_DMA
+
+    ADD offset, offset, TILE_SIZE
+    JMP .read_loop
+
+.read_done:
+PMU_STOP
+
+SCALAR read_cycles, read_bytes
+PMU_READ read_cycles, CYCLES
+PMU_READ read_bytes, DMA_LOAD_B
+
+STORE GM[args.metrics + 0], read_cycles
+STORE GM[args.metrics + 8], read_bytes
+
+# ========================================
+# Test Write Bandwidth
+# ========================================
+PMU_RESET
+PMU_START CYCLES, DMA_STORE_B
+
+SCALAR offset = 0
+.write_loop:
+    CMP offset, total_size
+    JGE .write_done
+
+    SCALAR tile_n = MIN(TILE_SIZE, total_size - offset)
+    SCALAR addr = args.buffer + offset * 4
+
+    DMA_STORE GM[addr], UB[UB_BUF : UB_BUF + tile_n*4], tile_n * 4
+    WAIT_DMA
+
+    ADD offset, offset, TILE_SIZE
+    JMP .write_loop
+
+.write_done:
+PMU_STOP
+
+SCALAR write_cycles, write_bytes
+PMU_READ write_cycles, CYCLES
+PMU_READ write_bytes, DMA_STORE_B
+
+STORE GM[args.metrics + 16], write_cycles
+STORE GM[args.metrics + 24], write_bytes
+
+RET
+
+
+# ============================================================
+# Notes on PMU Usage
+# ============================================================
+#
+# Counter Selection:
+#   - Choose counters based on suspected bottleneck
+#   - Hardware may limit simultaneous counters (check docs)
+#
+# Measurement Overhead:
+#   - PMU_START/STOP have minimal overhead (~10 cycles)
+#   - PMU_READ is fast (1-2 cycles)
+#   - Don't include PMU ops in measured section
+#
+# Derived Metrics (compute on host):
+#   - Utilization = unit_cycles / total_cycles
+#   - Bandwidth = bytes / (cycles / clock_freq)
+#   - Op Intensity = FLOPs / bytes
+#   - IPC = instructions / cycles
+#
+# Common Pitfalls:
+#   - Forgetting WAIT before PMU_STOP (measures incomplete work)
+#   - Counter overflow for long kernels (use 64-bit)
+#   - Comparing across different hardware (counters vary)
+#
+# Performance Targets (A3/910C, FP16):
+#   - Cube peak: 320 TFLOPS
+#   - Vector peak: 40 TFLOPS
+#   - Memory BW: 2 TB/s
+#   - Utilization goal: >80% for compute-bound kernels

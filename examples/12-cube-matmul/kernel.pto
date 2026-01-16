@@ -1,0 +1,190 @@
+# PTO-ISA Kernel: Matrix Multiplication using Cube Unit
+#
+# C[M×N] = A[M×K] × B[K×N]
+#
+# Uses MMAD instruction with tiling for large matrices.
+
+# ============================================================
+# Kernel: Basic GEMM (single block, fits in L0)
+# ============================================================
+
+.kernel cube_gemm_small
+.args {
+    A:      ptr<f16>     # Matrix A [M × K] row-major
+    B:      ptr<f16>     # Matrix B [K × N] col-major
+    C:      ptr<f16>     # Matrix C [M × N] row-major
+    M:      i32
+    K:      i32
+    N:      i32
+}
+
+# L0 buffer sizes (for FP16)
+.const L0A_SIZE = 32768   # 64KB / 2 bytes = 32K elements
+.const L0B_SIZE = 32768
+.const L0C_SIZE = 131072  # 256KB / 2 bytes = 128K elements
+
+SCALAR m = args.M
+SCALAR k = args.K
+SCALAR n = args.N
+
+# Verify matrices fit in L0 (small case)
+# L0A: M × K elements
+# L0B: K × N elements
+# L0C: M × N elements
+
+# Load A to L0A
+SCALAR a_bytes = m * k * 2
+DMA_LOAD_L0A L0A[0 : m*k], GM[args.A], a_bytes
+WAIT_DMA
+
+# Load B to L0B
+SCALAR b_bytes = k * n * 2
+DMA_LOAD_L0B L0B[0 : k*n], GM[args.B], b_bytes
+WAIT_DMA
+
+# Clear L0C (accumulator)
+MMAD_CLEAR L0C
+
+# Perform matrix multiply
+# MMAD processes in tiles of [16×16] × [16×16]
+# Hardware automatically tiles within L0 buffers
+MMAD L0C[0 : m*n], L0A[0 : m*k], L0B[0 : k*n], m, k, n
+WAIT_CUBE
+
+# Store C from L0C
+SCALAR c_bytes = m * n * 2
+DMA_STORE_L0C GM[args.C], L0C[0 : m*n], c_bytes
+WAIT_DMA
+
+RET
+
+
+# ============================================================
+# Kernel: Tiled GEMM (large matrices)
+# ============================================================
+
+.kernel cube_gemm_tiled
+.args {
+    A:      ptr<f16>
+    B:      ptr<f16>
+    C:      ptr<f16>
+    M:      i32
+    K:      i32
+    N:      i32
+}
+
+# Tile sizes chosen to fit L0 buffers
+.const TILE_M = 128      # L0A: 128 × 64 = 8K elements
+.const TILE_K = 64
+.const TILE_N = 128      # L0B: 64 × 128 = 8K elements
+                         # L0C: 128 × 128 = 16K elements
+
+SCALAR total_m = args.M
+SCALAR total_k = args.K
+SCALAR total_n = args.N
+
+# Outer loop: M tiles
+SCALAR m_tile = 0
+.loop_m:
+    CMP m_tile, total_m
+    JGE .done_m
+
+    # Inner loop: N tiles
+    SCALAR n_tile = 0
+    .loop_n:
+        CMP n_tile, total_n
+        JGE .done_n
+
+        # Clear accumulator for this C tile
+        MMAD_CLEAR L0C
+
+        # K reduction loop
+        SCALAR k_tile = 0
+        .loop_k:
+            CMP k_tile, total_k
+            JGE .done_k
+
+            # Calculate actual tile dimensions (handle edges)
+            SCALAR tile_m = MIN(TILE_M, total_m - m_tile)
+            SCALAR tile_k = MIN(TILE_K, total_k - k_tile)
+            SCALAR tile_n = MIN(TILE_N, total_n - n_tile)
+
+            # ========================================
+            # Load A tile [tile_m × tile_k]
+            # ========================================
+            # A is row-major: stride = K elements
+            SCALAR a_offset = (m_tile * total_k + k_tile) * 2
+            SCALAR a_addr = args.A + a_offset
+
+            # Load with proper stride for row-major
+            DMA_LOAD_L0A_STRIDED L0A, GM[a_addr], tile_m, tile_k, total_k
+            WAIT_DMA
+
+            # ========================================
+            # Load B tile [tile_k × tile_n]
+            # ========================================
+            # B is col-major: stride = K elements per column
+            SCALAR b_offset = (n_tile * total_k + k_tile) * 2
+            SCALAR b_addr = args.B + b_offset
+
+            DMA_LOAD_L0B_STRIDED L0B, GM[b_addr], tile_k, tile_n, total_k
+            WAIT_DMA
+
+            # ========================================
+            # MMAD: L0C += L0A × L0B
+            # ========================================
+            MMAD L0C, L0A, L0B, tile_m, tile_k, tile_n
+            WAIT_CUBE
+
+            ADD k_tile, k_tile, TILE_K
+            JMP .loop_k
+
+        .done_k:
+
+        # ========================================
+        # Store C tile [tile_m × tile_n]
+        # ========================================
+        SCALAR tile_m = MIN(TILE_M, total_m - m_tile)
+        SCALAR tile_n = MIN(TILE_N, total_n - n_tile)
+
+        SCALAR c_offset = (m_tile * total_n + n_tile) * 2
+        SCALAR c_addr = args.C + c_offset
+
+        DMA_STORE_L0C_STRIDED GM[c_addr], L0C, tile_m, tile_n, total_n
+        WAIT_DMA
+
+        ADD n_tile, n_tile, TILE_N
+        JMP .loop_n
+
+    .done_n:
+
+    ADD m_tile, m_tile, TILE_M
+    JMP .loop_m
+
+.done_m:
+    RET
+
+
+# ============================================================
+# Notes on Cube Unit Programming
+# ============================================================
+#
+# MMAD Instruction:
+#   - Atomic matrix multiply-add operation
+#   - Processes in hardware-defined tile sizes
+#   - Accumulates into L0C (needs explicit clear)
+#
+# Data Layout:
+#   - A: Row-major (NZ format) - adjacent elements in same row
+#   - B: Col-major (ZN format) - adjacent elements in same column
+#   - Layout conversion often done in L1 during load
+#
+# L1 Staging (not shown above for clarity):
+#   - Real kernels stage through L1 for bandwidth
+#   - Double-buffer in L1 to overlap DMA and compute
+#   - L1 can also do layout transformation
+#
+# Multi-block Distribution:
+#   - Split M dimension across blocks
+#   - Each block computes C[m_start:m_end, :]
+#   - Block reduction needed for split-K patterns

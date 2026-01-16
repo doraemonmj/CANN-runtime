@@ -1,0 +1,26 @@
+# Claude
+.claude/
+
+# Build
+build/
+cmake-build-*/
+*.o
+*.so
+*.a
+
+# Documentation
+docs/_build/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# IDE/OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Clangd
+.cache/

@@ -1,0 +1,247 @@
+# PTO-ISA Kernel: AICORE Consumer with Register Signaling
+#
+# Waits for AICPU signal, processes data, signals completion
+
+# ============================================================
+# Kernel: Basic Consumer
+# ============================================================
+# Waits for data ready signal, processes, signals done
+
+.kernel aicore_consumer
+.args {
+    input:   ptr<f32>    # HBM buffer prepared by AICPU
+    output:  ptr<f32>    # Result buffer
+    max_count: i32       # Maximum expected elements
+}
+
+# Shared register indices (must match AICPU)
+.const REG_DATA_READY   = 0
+.const REG_DATA_SIZE    = 1
+.const REG_COMPUTE_DONE = 2
+
+.const UB_INPUT  = 0
+.const UB_OUTPUT = 65536
+
+# ========================================
+# Wait for data ready signal from AICPU
+# ========================================
+SCALAR expected_batch = 1   # First batch has ID 1
+
+.wait_data:
+    REG_READ data_ready, REG_DATA_READY
+    CMP data_ready, expected_batch
+    JLT .wait_data
+
+# Read data size
+REG_READ count, REG_DATA_SIZE
+
+# ========================================
+# Process data
+# ========================================
+
+# Load from HBM (data prepared by AICPU)
+SCALAR bytes = count * 4
+DMA_LOAD UB[UB_INPUT : UB_INPUT + bytes], GM[args.input], bytes
+WAIT_DMA
+
+# Compute: output = input * 2 + 1
+VMULS UB[UB_OUTPUT : UB_OUTPUT + bytes], UB[UB_INPUT : UB_INPUT + bytes], 2.0
+WAIT_VEC
+
+VADDS UB[UB_OUTPUT : UB_OUTPUT + bytes], UB[UB_OUTPUT : UB_OUTPUT + bytes], 1.0
+WAIT_VEC
+
+# Store result
+DMA_STORE GM[args.output], UB[UB_OUTPUT : UB_OUTPUT + bytes], bytes
+WAIT_DMA
+
+# ========================================
+# Signal completion to AICPU
+# ========================================
+REG_WRITE REG_COMPUTE_DONE, expected_batch
+
+RET
+
+
+# ============================================================
+# Kernel: Multi-Batch Consumer
+# ============================================================
+# Processes multiple batches using ping-pong pattern
+
+.kernel aicore_multi_batch_consumer
+.args {
+    buffer:     ptr<f32>    # Double-buffered input from AICPU
+    output:     ptr<f32>    # Output buffer
+    count_per_batch: i32
+    num_batches: i32
+}
+
+.const REG_DATA_READY   = 0
+.const REG_DATA_SIZE    = 1
+.const REG_COMPUTE_DONE = 2
+
+.const UB_INPUT  = 0
+.const UB_OUTPUT = 65536
+
+SCALAR batch_count = args.count_per_batch
+SCALAR total_batches = args.num_batches
+SCALAR batch_bytes = batch_count * 4
+
+SCALAR current_batch = 0
+
+.batch_loop:
+    CMP current_batch, total_batches
+    JGE .all_done
+
+    # Expected batch ID (1-indexed)
+    SCALAR expected_id = current_batch + 1
+
+    # ========================================
+    # Wait for this batch to be ready
+    # ========================================
+    .wait_batch:
+        REG_READ data_ready, REG_DATA_READY
+        CMP data_ready, expected_id
+        JLT .wait_batch
+
+    # ========================================
+    # Load from appropriate ping/pong buffer
+    # ========================================
+    SCALAR buf_idx = current_batch % 2
+    SCALAR in_offset = buf_idx * batch_count * 4
+    SCALAR in_addr = args.buffer + in_offset
+
+    DMA_LOAD UB[UB_INPUT : UB_INPUT + batch_bytes], GM[in_addr], batch_bytes
+    WAIT_DMA
+
+    # ========================================
+    # Process this batch
+    # ========================================
+    VMULS UB[UB_OUTPUT], UB[UB_INPUT], 2.0, batch_count
+    WAIT_VEC
+    VADDS UB[UB_OUTPUT], UB[UB_OUTPUT], 1.0, batch_count
+    WAIT_VEC
+
+    # ========================================
+    # Store to output buffer
+    # ========================================
+    SCALAR out_offset = current_batch * batch_count * 4
+    SCALAR out_addr = args.output + out_offset
+    DMA_STORE GM[out_addr], UB[UB_OUTPUT : UB_OUTPUT + batch_bytes], batch_bytes
+    WAIT_DMA
+
+    # ========================================
+    # Signal this batch complete
+    # ========================================
+    REG_WRITE REG_COMPUTE_DONE, expected_id
+
+    # Next batch
+    ADD current_batch, current_batch, 1
+    JMP .batch_loop
+
+.all_done:
+    RET
+
+
+# ============================================================
+# Kernel: Barrier Participant
+# ============================================================
+# Demonstrates barrier using shared registers
+
+.kernel aicore_barrier_participant
+.args {
+    data:       ptr<f32>
+    count:      i32
+    block_id:   i32
+}
+
+.const REG_ARRIVE_COUNT = 4
+.const REG_RELEASE_FLAG = 5
+
+.const UB_DATA = 0
+
+SCALAR n = args.count
+SCALAR bytes = n * 4
+
+# ========================================
+# Phase 1: Local computation
+# ========================================
+
+# Each block processes its portion of data
+SCALAR offset = args.block_id * n * 4
+SCALAR addr = args.data + offset
+
+DMA_LOAD UB[UB_DATA : UB_DATA + bytes], GM[addr], bytes
+WAIT_DMA
+
+VMULS UB[UB_DATA : UB_DATA + bytes], UB[UB_DATA : UB_DATA + bytes], 2.0
+WAIT_VEC
+
+DMA_STORE GM[addr], UB[UB_DATA : UB_DATA + bytes], bytes
+WAIT_DMA
+
+# ========================================
+# Barrier: Synchronize all blocks
+# ========================================
+
+# Signal arrival (atomic increment)
+REG_ATOMIC_ADD old_count, REG_ARRIVE_COUNT, 1
+
+# Wait for release signal from AICPU
+.wait_release:
+    REG_READ release, REG_RELEASE_FLAG
+    CMP release, 0
+    JEQ .wait_release
+
+# ========================================
+# Phase 2: Access other blocks' data
+# ========================================
+# Now safe because all blocks have completed phase 1
+
+# Read neighbor's data (block_id + 1, with wrap)
+# (In practice, AICPU would provide neighbor info)
+SCALAR neighbor_offset = ((args.block_id + 1) % 24) * n * 4
+SCALAR neighbor_addr = args.data + neighbor_offset
+
+DMA_LOAD UB[UB_DATA : UB_DATA + bytes], GM[neighbor_addr], bytes
+WAIT_DMA
+
+# Combine with local result
+SCALAR my_addr = args.data + offset
+DMA_LOAD UB[32768 : 32768 + bytes], GM[my_addr], bytes
+WAIT_DMA
+
+VADD UB[UB_DATA : UB_DATA + bytes], UB[UB_DATA : UB_DATA + bytes], UB[32768 : 32768 + bytes]
+WAIT_VEC
+
+DMA_STORE GM[my_addr], UB[UB_DATA : UB_DATA + bytes], bytes
+WAIT_DMA
+
+RET
+
+
+# ============================================================
+# Notes on Register-Based Synchronization
+# ============================================================
+#
+# Register operations:
+#   REG_READ dest, reg_id      - Read shared register
+#   REG_WRITE reg_id, value    - Write shared register
+#   REG_ATOMIC_ADD dest, reg_id, value - Atomic add
+#
+# Timing:
+#   - Register access: ~100ns
+#   - Much faster than HBM atomics (~500ns)
+#   - Good for fine-grained synchronization
+#
+# Best practices:
+#   - Use non-zero values for "ready" signals
+#   - Sequence numbers prevent stale signal issues
+#   - Reset registers between operations
+#   - Document register allocation clearly
+#
+# Common patterns:
+#   1. Ready/Done signaling (producer-consumer)
+#   2. Progress counters (monitoring)
+#   3. Barrier synchronization
+#   4. Flow control (prevent overrun)

@@ -1,0 +1,186 @@
+# PTO-ISA Kernel: Vector SIMD Operations Demo
+#
+# This kernel demonstrates various vector instructions
+# including softmax as a complete example.
+
+# ============================================================
+# Kernel: Vector Softmax
+# ============================================================
+# softmax(x) = exp(x - max(x)) / sum(exp(x - max(x)))
+
+.kernel vec_softmax
+.args {
+    input:   ptr<f32>    # GM pointer to input array
+    output:  ptr<f32>    # GM pointer to output array
+    count:   i32         # Number of elements (must be <= 16K)
+}
+
+# ============================================================
+# UB Allocation
+# ============================================================
+# UB = 256 KB = 64K floats
+# We allocate:
+#   UB[0:16K]      = input buffer
+#   UB[16K:32K]    = temp buffer (exp results)
+#   UB[32K:48K]    = output buffer
+
+.const UB_INPUT  = 0
+.const UB_TEMP   = 16384      # 16K floats
+.const UB_OUTPUT = 32768      # 32K floats
+
+# ============================================================
+# Main Processing
+# ============================================================
+
+# Load input from GM to UB
+SCALAR  n = args.count
+SCALAR  src_addr = args.input
+DMA_LOAD UB[UB_INPUT : UB_INPUT + n], GM[src_addr], n * 4
+WAIT_DMA
+
+# ============================================================
+# Step 1: Find maximum value (for numerical stability)
+# ============================================================
+# VREDUCE_MAX computes max across all elements
+
+VREDUCE_MAX  r_max, UB[UB_INPUT : UB_INPUT + n]
+WAIT_VEC
+
+# ============================================================
+# Step 2: Subtract max and compute exp
+# ============================================================
+# temp[i] = exp(input[i] - max)
+# This prevents overflow in exp()
+
+VSUBS  UB[UB_TEMP : UB_TEMP + n], UB[UB_INPUT : UB_INPUT + n], r_max
+WAIT_VEC
+
+VEXP   UB[UB_TEMP : UB_TEMP + n], UB[UB_TEMP : UB_TEMP + n]
+WAIT_VEC
+
+# ============================================================
+# Step 3: Compute sum of exp values
+# ============================================================
+
+VREDUCE_SUM  r_sum, UB[UB_TEMP : UB_TEMP + n]
+WAIT_VEC
+
+# ============================================================
+# Step 4: Divide by sum to get probabilities
+# ============================================================
+# output[i] = exp_val[i] / sum
+
+SCALAR  r_inv_sum = 1.0 / r_sum     # Scalar reciprocal
+VMULS   UB[UB_OUTPUT : UB_OUTPUT + n], UB[UB_TEMP : UB_TEMP + n], r_inv_sum
+WAIT_VEC
+
+# ============================================================
+# Store output to GM
+# ============================================================
+
+SCALAR  dst_addr = args.output
+DMA_STORE GM[dst_addr], UB[UB_OUTPUT : UB_OUTPUT + n], n * 4
+WAIT_DMA
+
+RET
+
+
+# ============================================================
+# Kernel: Vector Activation (ReLU + BatchNorm fused)
+# ============================================================
+# y = relu(gamma * x + beta)
+
+.kernel vec_bn_relu
+.args {
+    input:   ptr<f32>
+    output:  ptr<f32>
+    gamma:   ptr<f32>    # Scale parameter
+    beta:    ptr<f32>    # Bias parameter
+    count:   i32
+}
+
+SCALAR  n = args.count
+
+# Load input, gamma, beta
+DMA_LOAD UB[0 : n], GM[args.input], n * 4
+DMA_LOAD UB[n : 2*n], GM[args.gamma], n * 4
+DMA_LOAD UB[2*n : 3*n], GM[args.beta], n * 4
+WAIT_DMA
+
+# y = gamma * x
+VMUL    UB[3*n : 4*n], UB[0 : n], UB[n : 2*n]
+WAIT_VEC
+
+# y = y + beta
+VADD    UB[3*n : 4*n], UB[3*n : 4*n], UB[2*n : 3*n]
+WAIT_VEC
+
+# y = relu(y)
+VRELU   UB[3*n : 4*n], UB[3*n : 4*n]
+WAIT_VEC
+
+# Store output
+DMA_STORE GM[args.output], UB[3*n : 4*n], n * 4
+WAIT_DMA
+
+RET
+
+
+# ============================================================
+# Kernel: Vector Type Conversion
+# ============================================================
+# Convert FP16 input to FP32, process, convert back
+
+.kernel vec_convert_demo
+.args {
+    input_fp16:  ptr<f16>
+    output_fp16: ptr<f16>
+    count:       i32
+    scale:       f32
+}
+
+SCALAR  n = args.count
+
+# Load FP16 data (half the bytes)
+DMA_LOAD UB[0 : n], GM[args.input_fp16], n * 2
+WAIT_DMA
+
+# Convert FP16 -> FP32
+# Note: FP16 takes half the UB space, FP32 result uses full space
+VCONV   UB[n : 2*n], UB[0 : n], FP16_TO_FP32
+WAIT_VEC
+
+# Process in FP32 (higher precision)
+VMULS   UB[n : 2*n], UB[n : 2*n], args.scale
+WAIT_VEC
+
+# Convert FP32 -> FP16
+VCONV   UB[2*n : 3*n], UB[n : 2*n], FP32_TO_FP16
+WAIT_VEC
+
+# Store FP16 result
+DMA_STORE GM[args.output_fp16], UB[2*n : 3*n], n * 2
+WAIT_DMA
+
+RET
+
+
+# ============================================================
+# Notes on Vector Instructions
+# ============================================================
+#
+# Instruction Format:
+#   V<op>  dst, src1 [, src2]    # Vector-vector
+#   V<op>S dst, src, scalar      # Vector-scalar
+#
+# Memory:
+#   All vector operands must be in UB
+#   DMA moves data between GM and UB
+#
+# Throughput:
+#   Most instructions: 256 elements/cycle
+#   Transcendentals (exp, log): 64 elements/cycle
+#
+# Pipelining:
+#   WAIT_VEC ensures previous vector op completes
+#   Can be relaxed if no data dependency

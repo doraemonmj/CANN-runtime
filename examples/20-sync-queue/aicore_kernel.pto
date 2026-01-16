@@ -1,0 +1,406 @@
+# PTO-ISA Kernel: Queue-Based Consumer
+#
+# Pops work items from SPSC queue, processes them
+
+# ============================================================
+# Queue Structure (must match AICPU)
+# ============================================================
+#
+# struct SPSCQueue {
+#     int32_t head;           // Offset 0 (cache line 0)
+#     int32_t _pad1[15];      // Padding
+#     int32_t tail;           // Offset 64 (cache line 1)
+#     int32_t _pad2[15];      // Padding
+#     int32_t capacity;       // Offset 128
+#     int32_t item_size;      // Offset 132
+#     int32_t _pad3[14];      // Padding
+#     uint8_t data[];         // Offset 192 (items)
+# }
+#
+# TaskDesc (64 bytes):
+#     task_id:     int32 @ 0
+#     task_type:   int32 @ 4
+#     priority:    int32 @ 8
+#     data_offset: int32 @ 12
+#     data_size:   int32 @ 16
+
+.const QUEUE_HEAD_OFFSET     = 0
+.const QUEUE_TAIL_OFFSET     = 64
+.const QUEUE_CAPACITY_OFFSET = 128
+.const QUEUE_ITEM_SIZE_OFFSET = 132
+.const QUEUE_DATA_OFFSET     = 192
+
+.const TASK_ID_OFFSET        = 0
+.const TASK_TYPE_OFFSET      = 4
+.const TASK_DATA_OFFSET_OFFSET = 12
+.const TASK_DATA_SIZE_OFFSET = 16
+
+.const TASK_TYPE_SCALE   = 1
+.const TASK_TYPE_ADD     = 2
+.const TASK_TYPE_REDUCE  = 3
+.const TASK_TYPE_END     = -1
+
+
+# ============================================================
+# Kernel: SPSC Queue Consumer
+# ============================================================
+
+.kernel aicore_queue_consumer
+.args {
+    queue:       ptr<i8>     # Pointer to SPSCQueue
+    data_buffer: ptr<f32>    # Shared data buffer
+    results:     ptr<f32>    # Output results
+    done_count:  ptr<i32>    # Processed count
+}
+
+.const UB_TASK  = 0       # Space for task descriptor (64 bytes)
+.const UB_DATA  = 64      # Space for task data
+.const UB_RESULT = 65536  # Space for results
+
+SCALAR queue_ptr = args.queue
+
+# Read queue metadata
+SCALAR capacity_addr = queue_ptr + QUEUE_CAPACITY_OFFSET
+SCALAR item_size_addr = queue_ptr + QUEUE_ITEM_SIZE_OFFSET
+
+LOAD capacity, GM[capacity_addr]
+LOAD item_size, GM[item_size_addr]
+
+SCALAR data_base = queue_ptr + QUEUE_DATA_OFFSET
+SCALAR processed = 0
+
+# ========================================
+# Main consumer loop
+# ========================================
+.consume_loop:
+
+    # Read current head and tail
+    SCALAR head_addr = queue_ptr + QUEUE_HEAD_OFFSET
+    SCALAR tail_addr = queue_ptr + QUEUE_TAIL_OFFSET
+
+    .wait_item:
+        LOAD head, GM[head_addr]
+        LOAD tail, GM[tail_addr]
+        CMP tail, head
+        JEQ .wait_item    # Queue empty, spin
+
+    # Calculate slot address
+    SCALAR slot_offset = tail * item_size
+    SCALAR slot_addr = data_base + slot_offset
+
+    # Load task descriptor (64 bytes)
+    DMA_LOAD UB[UB_TASK : UB_TASK + 64], GM[slot_addr], 64
+    WAIT_DMA
+
+    FENCE   # Ensure we see task data before updating tail
+
+    # Update tail (release slot)
+    SCALAR next_tail = (tail + 1) % capacity
+    STORE GM[tail_addr], next_tail
+
+    # Extract task fields from UB
+    SCALAR task_id, task_type, data_offset, data_size
+    LOAD_UB task_id, UB[UB_TASK + TASK_ID_OFFSET]
+    LOAD_UB task_type, UB[UB_TASK + TASK_TYPE_OFFSET]
+    LOAD_UB data_offset, UB[UB_TASK + TASK_DATA_OFFSET_OFFSET]
+    LOAD_UB data_size, UB[UB_TASK + TASK_DATA_SIZE_OFFSET]
+
+    # Check for end marker
+    CMP task_type, TASK_TYPE_END
+    JEQ .consumer_done
+
+    # ========================================
+    # Load task data
+    # ========================================
+    SCALAR data_addr = args.data_buffer + data_offset
+    DMA_LOAD UB[UB_DATA : UB_DATA + data_size], GM[data_addr], data_size
+    WAIT_DMA
+
+    SCALAR num_elements = data_size / 4    # Assuming float32
+
+    # ========================================
+    # Execute based on task type
+    # ========================================
+    CMP task_type, TASK_TYPE_SCALE
+    JEQ .do_scale
+
+    CMP task_type, TASK_TYPE_ADD
+    JEQ .do_add
+
+    CMP task_type, TASK_TYPE_REDUCE
+    JEQ .do_reduce
+
+    JMP .task_done    # Unknown type, skip
+
+.do_scale:
+    # Scale by 2.0
+    VMULS UB[UB_RESULT : UB_RESULT + data_size], UB[UB_DATA : UB_DATA + data_size], 2.0
+    WAIT_VEC
+    JMP .store_result
+
+.do_add:
+    # Add 100.0
+    VADDS UB[UB_RESULT : UB_RESULT + data_size], UB[UB_DATA : UB_DATA + data_size], 100.0
+    WAIT_VEC
+    JMP .store_result
+
+.do_reduce:
+    # Sum reduction
+    VREDUCE_ADD sum, UB[UB_DATA : UB_DATA + data_size], num_elements
+    WAIT_VEC
+    # Store single result
+    STORE_UB UB[UB_RESULT], sum
+    SCALAR data_size = 4    # Override to store just the sum
+    JMP .store_result
+
+.store_result:
+    # Store result at corresponding output location
+    SCALAR result_addr = args.results + data_offset
+    DMA_STORE GM[result_addr], UB[UB_RESULT : UB_RESULT + data_size], data_size
+    WAIT_DMA
+
+.task_done:
+    ADD processed, processed, 1
+
+    # Report progress periodically
+    SCALAR report_interval = processed % 10
+    CMP report_interval, 0
+    JNE .consume_loop
+
+    ATOMIC_ADD old, GM[args.done_count], 10
+
+    JMP .consume_loop
+
+.consumer_done:
+    # Final progress update
+    SCALAR remaining = processed % 10
+    CMP remaining, 0
+    JEQ .exit
+    ATOMIC_ADD old, GM[args.done_count], remaining
+
+.exit:
+    RET
+
+
+# ============================================================
+# Kernel: Pipeline Stage (Queue-to-Queue)
+# ============================================================
+# Reads from input queue, processes, writes to output queue
+
+.kernel aicore_pipeline_stage
+.args {
+    input_queue:  ptr<i8>
+    output_queue: ptr<i8>
+    data_buffer:  ptr<f32>
+}
+
+.const UB_TASK   = 0
+.const UB_INPUT  = 64
+.const UB_OUTPUT = 65536
+
+SCALAR in_queue = args.input_queue
+SCALAR out_queue = args.output_queue
+
+# Read queue metadata
+LOAD in_capacity, GM[in_queue + QUEUE_CAPACITY_OFFSET]
+LOAD in_item_size, GM[in_queue + QUEUE_ITEM_SIZE_OFFSET]
+LOAD out_capacity, GM[out_queue + QUEUE_CAPACITY_OFFSET]
+LOAD out_item_size, GM[out_queue + QUEUE_ITEM_SIZE_OFFSET]
+
+SCALAR in_data_base = in_queue + QUEUE_DATA_OFFSET
+SCALAR out_data_base = out_queue + QUEUE_DATA_OFFSET
+
+.stage_loop:
+    # ========================================
+    # Pop from input queue
+    # ========================================
+    SCALAR in_head_addr = in_queue + QUEUE_HEAD_OFFSET
+    SCALAR in_tail_addr = in_queue + QUEUE_TAIL_OFFSET
+
+    .wait_input:
+        LOAD in_head, GM[in_head_addr]
+        LOAD in_tail, GM[in_tail_addr]
+        CMP in_tail, in_head
+        JEQ .wait_input
+
+    SCALAR in_slot = in_data_base + in_tail * in_item_size
+    DMA_LOAD UB[UB_TASK : UB_TASK + 64], GM[in_slot], 64
+    WAIT_DMA
+
+    FENCE
+    SCALAR next_in_tail = (in_tail + 1) % in_capacity
+    STORE GM[in_tail_addr], next_in_tail
+
+    # Check for end
+    LOAD_UB task_type, UB[UB_TASK + TASK_TYPE_OFFSET]
+    CMP task_type, TASK_TYPE_END
+    JEQ .forward_end
+
+    # ========================================
+    # Process
+    # ========================================
+    LOAD_UB data_offset, UB[UB_TASK + TASK_DATA_OFFSET_OFFSET]
+    LOAD_UB data_size, UB[UB_TASK + TASK_DATA_SIZE_OFFSET]
+
+    SCALAR data_addr = args.data_buffer + data_offset
+    DMA_LOAD UB[UB_INPUT : UB_INPUT + data_size], GM[data_addr], data_size
+    WAIT_DMA
+
+    # Apply transformation
+    VMULS UB[UB_OUTPUT], UB[UB_INPUT], 2.0, data_size/4
+    WAIT_VEC
+    VADDS UB[UB_OUTPUT], UB[UB_OUTPUT], 1.0, data_size/4
+    WAIT_VEC
+
+    # Write back to same buffer location
+    DMA_STORE GM[data_addr], UB[UB_OUTPUT : UB_OUTPUT + data_size], data_size
+    WAIT_DMA
+
+    # ========================================
+    # Push to output queue
+    # ========================================
+    SCALAR out_head_addr = out_queue + QUEUE_HEAD_OFFSET
+    SCALAR out_tail_addr = out_queue + QUEUE_TAIL_OFFSET
+
+    .wait_output_space:
+        LOAD out_head, GM[out_head_addr]
+        LOAD out_tail, GM[out_tail_addr]
+        SCALAR next_out_head = (out_head + 1) % out_capacity
+        CMP next_out_head, out_tail
+        JEQ .wait_output_space    # Output full
+
+    SCALAR out_slot = out_data_base + out_head * out_item_size
+    DMA_STORE GM[out_slot], UB[UB_TASK : UB_TASK + 64], 64
+    WAIT_DMA
+
+    FENCE
+    STORE GM[out_head_addr], next_out_head
+
+    JMP .stage_loop
+
+.forward_end:
+    # Forward end marker to output queue
+    SCALAR out_head_addr = out_queue + QUEUE_HEAD_OFFSET
+    SCALAR out_tail_addr = out_queue + QUEUE_TAIL_OFFSET
+
+    .wait_end_space:
+        LOAD out_head, GM[out_head_addr]
+        LOAD out_tail, GM[out_tail_addr]
+        SCALAR next_out_head = (out_head + 1) % out_capacity
+        CMP next_out_head, out_tail
+        JEQ .wait_end_space
+
+    SCALAR out_slot = out_data_base + out_head * out_item_size
+    DMA_STORE GM[out_slot], UB[UB_TASK : UB_TASK + 64], 64
+    WAIT_DMA
+
+    FENCE
+    STORE GM[out_head_addr], next_out_head
+
+    RET
+
+
+# ============================================================
+# Kernel: Multi-Block Queue Consumer
+# ============================================================
+# Multiple blocks compete for queue items
+
+.kernel aicore_multiblock_consumer
+.args {
+    queue:       ptr<i8>
+    data_buffer: ptr<f32>
+    results:     ptr<f32>
+    done_count:  ptr<i32>
+}
+
+# For multi-block, need atomic tail update
+# Use MPMC-style claiming
+
+SCALAR queue_ptr = args.queue
+LOAD capacity, GM[queue_ptr + QUEUE_CAPACITY_OFFSET]
+LOAD item_size, GM[queue_ptr + QUEUE_ITEM_SIZE_OFFSET]
+SCALAR data_base = queue_ptr + QUEUE_DATA_OFFSET
+
+SCALAR block_id = BLOCK_ID()
+SCALAR local_count = 0
+
+.mb_loop:
+    # Atomically claim a slot
+    SCALAR tail_addr = queue_ptr + QUEUE_TAIL_OFFSET
+    SCALAR head_addr = queue_ptr + QUEUE_HEAD_OFFSET
+
+    .claim_slot:
+        LOAD head, GM[head_addr]
+        LOAD tail, GM[tail_addr]
+
+        CMP tail, head
+        JEQ .claim_slot    # Empty, retry
+
+        # Try to claim this slot
+        SCALAR next_tail = (tail + 1) % capacity
+        ATOMIC_CAS result, GM[tail_addr], tail, next_tail
+        CMP result, tail
+        JNE .claim_slot    # Lost race, retry
+
+    # We own slot 'tail'
+    SCALAR slot_addr = data_base + tail * item_size
+    DMA_LOAD UB[0 : 64], GM[slot_addr], 64
+    WAIT_DMA
+
+    LOAD_UB task_type, UB[4]
+    CMP task_type, TASK_TYPE_END
+    JEQ .mb_done
+
+    # Process...
+    LOAD_UB data_offset, UB[12]
+    LOAD_UB data_size, UB[16]
+
+    SCALAR data_addr = args.data_buffer + data_offset
+    DMA_LOAD UB[64 : 64 + data_size], GM[data_addr], data_size
+    WAIT_DMA
+
+    VMULS UB[65536 : 65536 + data_size], UB[64 : 64 + data_size], 2.0
+    WAIT_VEC
+
+    SCALAR result_addr = args.results + data_offset
+    DMA_STORE GM[result_addr], UB[65536 : 65536 + data_size], data_size
+    WAIT_DMA
+
+    ADD local_count, local_count, 1
+    JMP .mb_loop
+
+.mb_done:
+    # Report this block's count
+    ATOMIC_ADD old, GM[args.done_count], local_count
+    RET
+
+
+# ============================================================
+# Notes on Queue-Based Synchronization
+# ============================================================
+#
+# SPSC Queue (recommended for AICPU<->AICORE):
+#   - No atomics needed (single reader, single writer)
+#   - Very fast (just memory barriers)
+#   - Use separate cache lines for head/tail
+#
+# MPMC Queue (for multi-block scenarios):
+#   - Uses CAS for claiming slots
+#   - More overhead but allows multiple consumers
+#   - Consider one SPSC queue per block instead
+#
+# Task queue pattern:
+#   - Push TaskDesc (metadata) to queue
+#   - Actual data in separate buffer
+#   - Allows variable-size tasks
+#
+# Pipeline pattern:
+#   - Chain queues between stages
+#   - Natural backpressure via queue full
+#   - Good for streaming workloads
+#
+# Performance tips:
+#   - Batch queue operations when possible
+#   - Size queue for 2-4x in-flight items
+#   - Align items to 32/64 bytes for DMA
+#   - Profile to find optimal queue depth

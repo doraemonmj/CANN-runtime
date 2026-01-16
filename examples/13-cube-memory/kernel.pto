@@ -1,0 +1,275 @@
+# PTO-ISA Kernel: L1/L0 Buffer Management
+#
+# Demonstrates L1 staging, double buffering, and prefetching
+# for efficient Cube unit utilization.
+
+# ============================================================
+# Kernel: GEMM with L1 Double Buffering
+# ============================================================
+
+.kernel gemm_l1_double_buffer
+.args {
+    A:      ptr<f16>     # Matrix A [M × K] row-major in HBM
+    B:      ptr<f16>     # Matrix B [K × N] col-major in HBM
+    C:      ptr<f16>     # Matrix C [M × N] row-major in HBM
+    M:      i32
+    K:      i32
+    N:      i32
+}
+
+# ========================================
+# L1 Buffer Layout (1 MB total)
+# ========================================
+# Each buffer sized for 256×128 FP16 tile = 64KB
+
+.const L1_A_PING  = 0           # A tile buffer 0
+.const L1_A_PONG  = 65536       # A tile buffer 1 (64KB offset)
+.const L1_B_PING  = 131072      # B tile buffer 0 (128KB offset)
+.const L1_B_PONG  = 196608      # B tile buffer 1 (192KB offset)
+.const L1_C_BUF   = 262144      # C output buffer (256KB offset)
+
+# Tile sizes
+.const TILE_M = 128
+.const TILE_K = 256
+.const TILE_N = 128
+
+SCALAR total_m = args.M
+SCALAR total_k = args.K
+SCALAR total_n = args.N
+
+# ========================================
+# Outer loop over M tiles
+# ========================================
+SCALAR m_tile = 0
+.loop_m:
+    CMP m_tile, total_m
+    JGE .done_m
+
+    # ========================================
+    # Inner loop over N tiles
+    # ========================================
+    SCALAR n_tile = 0
+    .loop_n:
+        CMP n_tile, total_n
+        JGE .done_n
+
+        # Clear L0C accumulator for this C tile
+        MMAD_CLEAR L0C
+
+        # ========================================
+        # K reduction with double buffering
+        # ========================================
+
+        SCALAR k_tile = 0
+        SCALAR active = 0   # 0 = ping, 1 = pong
+
+        # Preload first A and B tiles into L1 ping buffers
+        SCALAR a_offset = (m_tile * total_k + 0) * 2
+        SCALAR b_offset = (0 * total_n + n_tile) * 2
+
+        # Load with layout transformation
+        DMA_LOAD_L1_NZ L1[L1_A_PING], GM[args.A + a_offset], TILE_M, TILE_K, total_k
+        DMA_LOAD_L1_ZN L1[L1_B_PING], GM[args.B + b_offset], TILE_K, TILE_N, total_n
+        WAIT_DMA
+
+        .loop_k:
+            CMP k_tile, total_k
+            JGE .done_k
+
+            # Calculate actual tile dimensions (handle edge cases)
+            SCALAR tile_m = MIN(TILE_M, total_m - m_tile)
+            SCALAR tile_k = MIN(TILE_K, total_k - k_tile)
+            SCALAR tile_n = MIN(TILE_N, total_n - n_tile)
+
+            # Select active L1 buffers
+            SCALAR l1_a = active == 0 ? L1_A_PING : L1_A_PONG
+            SCALAR l1_b = active == 0 ? L1_B_PING : L1_B_PONG
+            SCALAR l1_a_next = active == 0 ? L1_A_PONG : L1_A_PING
+            SCALAR l1_b_next = active == 0 ? L1_B_PONG : L1_B_PING
+
+            # ========================================
+            # Start prefetching NEXT tiles (async)
+            # ========================================
+            SCALAR next_k = k_tile + TILE_K
+            CMP next_k, total_k
+            JGE .skip_prefetch
+
+            SCALAR next_a_offset = (m_tile * total_k + next_k) * 2
+            SCALAR next_b_offset = (next_k * total_n + n_tile) * 2
+
+            DMA_LOAD_L1_NZ_ASYNC L1[l1_a_next], GM[args.A + next_a_offset], TILE_M, TILE_K, total_k
+            DMA_LOAD_L1_ZN_ASYNC L1[l1_b_next], GM[args.B + next_b_offset], TILE_K, TILE_N, total_n
+
+        .skip_prefetch:
+
+            # ========================================
+            # Move current tiles: L1 -> L0
+            # ========================================
+            L1_TO_L0A L0A, L1[l1_a], tile_m, tile_k
+            L1_TO_L0B L0B, L1[l1_b], tile_k, tile_n
+            WAIT_MTE  # Wait for L1->L0 transfer
+
+            # ========================================
+            # MMAD: L0C += L0A × L0B
+            # ========================================
+            MMAD L0C, L0A, L0B, tile_m, tile_k, tile_n
+            WAIT_CUBE
+
+            # ========================================
+            # Sync and swap buffers
+            # ========================================
+            WAIT_DMA_ASYNC  # Ensure prefetch completed
+            XOR active, active, 1
+
+            ADD k_tile, k_tile, TILE_K
+            JMP .loop_k
+
+        .done_k:
+
+        # ========================================
+        # Store C tile: L0C -> L1 -> HBM
+        # ========================================
+        SCALAR tile_m = MIN(TILE_M, total_m - m_tile)
+        SCALAR tile_n = MIN(TILE_N, total_n - n_tile)
+
+        # L0C -> L1 (with optional format conversion)
+        L0C_TO_L1 L1[L1_C_BUF], L0C, tile_m, tile_n
+        WAIT_MTE
+
+        # L1 -> HBM
+        SCALAR c_offset = (m_tile * total_n + n_tile) * 2
+        DMA_STORE_L1 GM[args.C + c_offset], L1[L1_C_BUF], tile_m, tile_n, total_n
+        WAIT_DMA
+
+        ADD n_tile, n_tile, TILE_N
+        JMP .loop_n
+
+    .done_n:
+
+    ADD m_tile, m_tile, TILE_M
+    JMP .loop_m
+
+.done_m:
+    RET
+
+
+# ============================================================
+# Kernel: L1 Format Transformation Demo
+# ============================================================
+# Shows explicit layout transformation in L1
+
+.kernel l1_transform_demo
+.args {
+    A_rowmajor:  ptr<f16>    # Input: row-major
+    A_nz:        ptr<f16>    # Output: NZ format (fractal)
+    rows:        i32
+    cols:        i32
+}
+
+.const L1_INPUT  = 0
+.const L1_OUTPUT = 524288    # 512KB offset
+
+SCALAR r = args.rows
+SCALAR c = args.cols
+
+# Load row-major data into L1 (no transformation)
+SCALAR bytes = r * c * 2
+DMA_LOAD_L1 L1[L1_INPUT], GM[args.A_rowmajor], bytes
+WAIT_DMA
+
+# Transform in L1: row-major -> NZ format
+# NZ format: 16x16 blocks in Z-order (fractal layout)
+#
+# Row-major:           NZ format:
+# [0,0][0,1][0,2]...   [block(0,0)][block(0,1)]...
+# [1,0][1,1][1,2]...   [block(1,0)][block(1,1)]...
+#
+# Each block is 16x16 stored contiguously
+
+L1_TRANSFORM_NZ L1[L1_OUTPUT], L1[L1_INPUT], r, c
+WAIT_MTE
+
+# Store transformed data
+DMA_STORE_L1 GM[args.A_nz], L1[L1_OUTPUT], bytes
+WAIT_DMA
+
+RET
+
+
+# ============================================================
+# Kernel: Optimal Tile Selection
+# ============================================================
+# Demonstrates choosing tile sizes for best efficiency
+
+.kernel optimal_tile_gemm
+.args {
+    A:      ptr<f16>
+    B:      ptr<f16>
+    C:      ptr<f16>
+    M:      i32
+    K:      i32
+    N:      i32
+}
+
+# Tile sizes optimized for L0 constraints and compute/memory ratio
+#
+# L0A constraint: TILE_M * TILE_K <= 32K (64KB / 2 bytes)
+# L0B constraint: TILE_K * TILE_N <= 32K
+# L0C constraint: TILE_M * TILE_N <= 128K (256KB / 2 bytes)
+#
+# Optimal for compute/memory ratio:
+#   - Larger tiles = better ratio
+#   - But must fit in L0
+
+# For 910C: 64KB L0A/L0B, 256KB L0C
+.const TILE_M = 256    # L0A: 256 * 128 = 32K (fits)
+.const TILE_K = 128
+.const TILE_N = 256    # L0B: 128 * 256 = 32K (fits)
+                       # L0C: 256 * 256 = 64K (fits, uses 1/2 capacity)
+
+# Compute/memory ratio:
+#   FLOPs: 2 * 256 * 128 * 256 = 16.7M
+#   Bytes: 2 * (32K + 32K + 64K) = 256KB
+#   Ratio: ~65 FLOPs/byte (excellent)
+
+SCALAR total_m = args.M
+SCALAR total_k = args.K
+SCALAR total_n = args.N
+
+# [Main loop structure same as gemm_l1_double_buffer]
+# ...
+
+RET
+
+
+# ============================================================
+# Notes on L1/L0 Buffer Management
+# ============================================================
+#
+# Key Principles:
+#
+# 1. L1 is for staging:
+#    - DMA between HBM and L1 (software managed)
+#    - MTE (Memory Transfer Engine) between L1 and L0
+#    - L1 acts as a cache you control explicitly
+#
+# 2. Layout transformation:
+#    - Do format conversion during L1 load when possible
+#    - NZ format for A, ZN format for B
+#    - Saves bandwidth vs transforming in compute
+#
+# 3. Double buffering:
+#    - Overlaps DMA with compute
+#    - Need 2x buffer space but hides latency
+#    - Critical for memory-bound kernels
+#
+# 4. Tile size selection:
+#    - Maximize compute/memory ratio
+#    - Must fit L0 constraints
+#    - Consider L1 capacity for double buffering
+#
+# 5. Synchronization:
+#    - WAIT_DMA: Wait for HBM <-> L1 transfers
+#    - WAIT_MTE: Wait for L1 <-> L0 transfers
+#    - WAIT_CUBE: Wait for MMAD completion
+#    - Use async variants for overlapping

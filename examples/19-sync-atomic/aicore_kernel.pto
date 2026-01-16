@@ -1,0 +1,357 @@
+# PTO-ISA Kernel: HBM Atomic-Based Coordination
+#
+# Demonstrates atomic operations for AICPU/AICORE sync
+
+# ============================================================
+# Kernel: Progress Reporter
+# ============================================================
+# Reports progress via HBM atomic counter
+
+.kernel aicore_progress_reporter
+.args {
+    input:   ptr<f32>
+    output:  ptr<f32>
+    count:   i32
+    sync:    ptr<i32>    # Points to SyncBlock.processed_count
+}
+
+.const UB_INPUT  = 0
+.const UB_OUTPUT = 65536
+.const TILE_SIZE = 8192     # Process 8K elements per tile
+
+SCALAR total = args.count
+SCALAR offset = 0
+
+.tile_loop:
+    CMP offset, total
+    JGE .done
+
+    SCALAR tile_n = MIN(TILE_SIZE, total - offset)
+    SCALAR bytes = tile_n * 4
+
+    # Load tile
+    SCALAR in_addr = args.input + offset * 4
+    DMA_LOAD UB[UB_INPUT : UB_INPUT + bytes], GM[in_addr], bytes
+    WAIT_DMA
+
+    # Process tile
+    VMULS UB[UB_OUTPUT : UB_OUTPUT + bytes], UB[UB_INPUT : UB_INPUT + bytes], 2.0
+    WAIT_VEC
+    VADDS UB[UB_OUTPUT : UB_OUTPUT + bytes], UB[UB_OUTPUT : UB_OUTPUT + bytes], 1.0
+    WAIT_VEC
+
+    # Store result
+    SCALAR out_addr = args.output + offset * 4
+    DMA_STORE GM[out_addr], UB[UB_OUTPUT : UB_OUTPUT + bytes], bytes
+    WAIT_DMA
+
+    # Report progress (atomic add to shared counter)
+    ATOMIC_ADD old_count, GM[args.sync], tile_n
+
+    ADD offset, offset, TILE_SIZE
+    JMP .tile_loop
+
+.done:
+    RET
+
+
+# ============================================================
+# Kernel: Self-Synchronizing Barrier
+# ============================================================
+# Barrier without AICPU involvement
+
+.kernel aicore_self_barrier
+.args {
+    data:        ptr<f32>
+    count:       i32
+    barrier:     ptr<i32>    # Points to SyncBlock.barrier_count
+    release:     ptr<i32>    # Points to SyncBlock.release_flag
+    num_blocks:  i32
+}
+
+.const UB_DATA = 0
+
+SCALAR block_id = BLOCK_ID()
+SCALAR n = args.count
+SCALAR bytes = n * 4
+
+# ========================================
+# Phase 1: Local computation
+# ========================================
+SCALAR my_offset = block_id * n * 4
+SCALAR my_addr = args.data + my_offset
+
+DMA_LOAD UB[UB_DATA : UB_DATA + bytes], GM[my_addr], bytes
+WAIT_DMA
+
+VMULS UB[UB_DATA : UB_DATA + bytes], UB[UB_DATA : UB_DATA + bytes], 2.0
+WAIT_VEC
+
+DMA_STORE GM[my_addr], UB[UB_DATA : UB_DATA + bytes], bytes
+WAIT_DMA
+
+# ========================================
+# Barrier: Self-managed using atomics
+# ========================================
+FENCE   # Ensure stores visible before barrier
+
+# Arrive at barrier
+ATOMIC_ADD arrival_order, GM[args.barrier], 1
+
+# Check if we're the last to arrive
+SCALAR expected_last = args.num_blocks - 1
+CMP arrival_order, expected_last
+JNE .wait_for_release
+
+# We're the last one - release all others
+STORE GM[args.release], 1
+JMP .barrier_done
+
+.wait_for_release:
+    # Wait for release signal
+    LOAD released, GM[args.release]
+    CMP released, 0
+    JEQ .wait_for_release
+
+.barrier_done:
+FENCE   # Ensure we see all other blocks' stores
+
+# ========================================
+# Phase 2: Cross-block access now safe
+# ========================================
+# Read neighbor's result
+SCALAR neighbor = (block_id + 1) % args.num_blocks
+SCALAR neighbor_offset = neighbor * n * 4
+SCALAR neighbor_addr = args.data + neighbor_offset
+
+DMA_LOAD UB[32768 : 32768 + bytes], GM[neighbor_addr], bytes
+WAIT_DMA
+
+# Combine
+DMA_LOAD UB[UB_DATA : UB_DATA + bytes], GM[my_addr], bytes
+WAIT_DMA
+
+VADD UB[UB_DATA : UB_DATA + bytes], UB[UB_DATA : UB_DATA + bytes], UB[32768 : 32768 + bytes]
+WAIT_VEC
+
+DMA_STORE GM[my_addr], UB[UB_DATA : UB_DATA + bytes], bytes
+WAIT_DMA
+
+RET
+
+
+# ============================================================
+# Kernel: Work Stealer
+# ============================================================
+# Dynamic work distribution with atomic index
+
+.kernel aicore_work_stealer
+.args {
+    work_queue:    ptr<i32>   # Array of work items
+    results:       ptr<i32>   # Output array
+    total_items:   i32
+    work_index:    ptr<i32>   # Atomic index (SyncBlock.work_index)
+    done_count:    ptr<i32>   # Processed count (SyncBlock.processed_count)
+}
+
+.const UB_WORK   = 0
+.const UB_RESULT = 4096
+
+.work_loop:
+    # Atomically claim next work item
+    ATOMIC_ADD my_idx, GM[args.work_index], 1
+
+    # Check if valid work
+    CMP my_idx, args.total_items
+    JGE .all_done
+
+    # Load work item
+    SCALAR work_addr = args.work_queue + my_idx * 4
+    DMA_LOAD UB[UB_WORK : UB_WORK + 4], GM[work_addr], 4
+    WAIT_DMA
+
+    # Process: result = work * 2 + 1
+    VMULS UB[UB_RESULT : UB_RESULT + 4], UB[UB_WORK : UB_WORK + 4], 2.0
+    WAIT_VEC
+    VADDS UB[UB_RESULT : UB_RESULT + 4], UB[UB_RESULT : UB_RESULT + 4], 1.0
+    WAIT_VEC
+
+    # Store result
+    SCALAR result_addr = args.results + my_idx * 4
+    DMA_STORE GM[result_addr], UB[UB_RESULT : UB_RESULT + 4], 4
+    WAIT_DMA
+
+    # Update done count
+    ATOMIC_ADD old, GM[args.done_count], 1
+
+    JMP .work_loop
+
+.all_done:
+    RET
+
+
+# ============================================================
+# Kernel: Error Signaling
+# ============================================================
+# Demonstrates error detection and propagation
+
+.kernel aicore_with_error_check
+.args {
+    input:      ptr<f32>
+    output:     ptr<f32>
+    count:      i32
+    error_flag: ptr<i32>   # SyncBlock.error_flag
+}
+
+.const UB_INPUT  = 0
+.const UB_OUTPUT = 65536
+
+.const ERROR_OVERFLOW = 0x2
+.const ERROR_INVALID  = 0x8
+
+SCALAR n = args.count
+SCALAR bytes = n * 4
+
+# Check if another block already errored
+LOAD err, GM[args.error_flag]
+CMP err, 0
+JNE .abort
+
+# Load input
+DMA_LOAD UB[UB_INPUT : UB_INPUT + bytes], GM[args.input], bytes
+WAIT_DMA
+
+# Validate input (check for NaN/Inf)
+VCHECK_FINITE valid_mask, UB[UB_INPUT : UB_INPUT + bytes], n
+WAIT_VEC
+
+# If any invalid, signal error
+CMP valid_mask, 0xFFFFFFFF
+JEQ .input_valid
+
+ATOMIC_OR old_err, GM[args.error_flag], ERROR_INVALID
+JMP .abort
+
+.input_valid:
+
+# Process
+VMULS UB[UB_OUTPUT : UB_OUTPUT + bytes], UB[UB_INPUT : UB_INPUT + bytes], 1000.0
+WAIT_VEC
+
+# Check for overflow
+VCHECK_FINITE result_valid, UB[UB_OUTPUT : UB_OUTPUT + bytes], n
+WAIT_VEC
+
+CMP result_valid, 0xFFFFFFFF
+JEQ .output_valid
+
+ATOMIC_OR old_err, GM[args.error_flag], ERROR_OVERFLOW
+JMP .abort
+
+.output_valid:
+
+# Store result
+DMA_STORE GM[args.output], UB[UB_OUTPUT : UB_OUTPUT + bytes], bytes
+WAIT_DMA
+
+RET
+
+.abort:
+    # Early exit on error
+    RET
+
+
+# ============================================================
+# Kernel: Hierarchical Reduction with Atomics
+# ============================================================
+# Combines local reduction with atomic global aggregation
+
+.kernel aicore_hierarchical_reduce
+.args {
+    input:        ptr<f32>
+    partial_sums: ptr<f32>   # Per-block partial sums
+    global_sum:   ptr<f32>   # Final result (atomic target)
+    count:        i32
+    num_blocks:   i32
+    done_count:   ptr<i32>   # For synchronization
+}
+
+.const UB_INPUT = 0
+.const TILE_SIZE = 16384
+
+SCALAR block_id = BLOCK_ID()
+SCALAR block_count = args.num_blocks
+
+# Calculate my range
+SCALAR elements_per_block = (args.count + block_count - 1) / block_count
+SCALAR start = block_id * elements_per_block
+SCALAR end = MIN(start + elements_per_block, args.count)
+
+# Local sum
+SCALAR local_sum = 0.0
+
+CMP start, args.count
+JGE .store_partial
+
+SCALAR offset = start
+.local_loop:
+    CMP offset, end
+    JGE .local_done
+
+    SCALAR tile_n = MIN(TILE_SIZE, end - offset)
+    SCALAR in_addr = args.input + offset * 4
+
+    DMA_LOAD UB[UB_INPUT : UB_INPUT + tile_n*4], GM[in_addr], tile_n * 4
+    WAIT_DMA
+
+    VREDUCE_ADD tile_sum, UB[UB_INPUT : UB_INPUT + tile_n*4], tile_n
+    WAIT_VEC
+
+    ADD local_sum, local_sum, tile_sum
+    ADD offset, offset, TILE_SIZE
+    JMP .local_loop
+
+.local_done:
+
+.store_partial:
+    # Store partial sum
+    SCALAR partial_addr = args.partial_sums + block_id * 4
+    STORE GM[partial_addr], local_sum
+
+    # Atomic add to global sum
+    ATOMIC_ADD_F32 old_sum, GM[args.global_sum], local_sum
+
+    # Signal completion
+    ATOMIC_ADD old_done, GM[args.done_count], 1
+
+RET
+
+
+# ============================================================
+# Notes on HBM Atomic Synchronization
+# ============================================================
+#
+# Atomic operations on HBM:
+#   ATOMIC_ADD, ATOMIC_SUB, ATOMIC_MAX, ATOMIC_MIN
+#   ATOMIC_AND, ATOMIC_OR, ATOMIC_XOR
+#   ATOMIC_CAS (compare-and-swap)
+#   ATOMIC_ADD_F32 (floating-point add)
+#
+# Key differences from shared registers:
+#   - Higher latency (~500ns vs ~100ns)
+#   - Higher bandwidth (can do more ops/sec)
+#   - More flexible addressing
+#   - Better for counters and distributed sync
+#
+# Patterns:
+#   1. Progress tracking: atomic increment counter
+#   2. Self-managing barrier: atomic arrive + spin wait
+#   3. Work stealing: atomic index allocation
+#   4. Error propagation: atomic OR flags
+#   5. Hierarchical reduction: local + atomic global
+#
+# Best practices:
+#   - Minimize atomic frequency (batch updates)
+#   - Use separate cache lines for different counters
+#   - Consider hierarchical approaches for scalability
+#   - Always check error flags in loops

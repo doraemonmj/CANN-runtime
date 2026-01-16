@@ -1,0 +1,201 @@
+# PTO-ISA Kernel: UB Memory Management Patterns
+#
+# Demonstrates UB allocation, tiling, and double buffering
+
+# ============================================================
+# Kernel: Static UB Allocation
+# ============================================================
+
+.kernel ub_static_demo
+.args {
+    input:   ptr<f32>
+    output:  ptr<f32>
+    count:   i32
+}
+
+# Static buffer offsets (compile-time constants)
+.const UB_INPUT  = 0           # Bytes 0 - 65535
+.const UB_OUTPUT = 65536       # Bytes 65536 - 131071
+.const UB_TEMP   = 131072      # Bytes 131072 - 196607
+
+# Each buffer: 16K floats = 64 KB
+
+SCALAR n = args.count
+
+# Verify n fits in UB (max 16K floats per buffer)
+# In production, would tile if n > 16K
+
+DMA_LOAD UB[UB_INPUT : UB_INPUT + n*4], GM[args.input], n * 4
+WAIT_DMA
+
+# Process: temp = input * 2
+VMULS UB[UB_TEMP : UB_TEMP + n*4], UB[UB_INPUT : UB_INPUT + n*4], 2.0
+WAIT_VEC
+
+# Process: output = temp + 1
+VADDS UB[UB_OUTPUT : UB_OUTPUT + n*4], UB[UB_TEMP : UB_TEMP + n*4], 1.0
+WAIT_VEC
+
+DMA_STORE GM[args.output], UB[UB_OUTPUT : UB_OUTPUT + n*4], n * 4
+WAIT_DMA
+
+RET
+
+
+# ============================================================
+# Kernel: Tiled Processing
+# ============================================================
+# Process large arrays by tiling
+
+.kernel ub_tiled_process
+.args {
+    input:   ptr<f32>
+    output:  ptr<f32>
+    count:   i32         # Can be > 16K
+}
+
+.const TILE_SIZE = 16384     # 16K floats = 64KB
+.const UB_INPUT  = 0
+.const UB_OUTPUT = 65536
+
+SCALAR n = args.count
+SCALAR offset = 0
+
+.tile_loop:
+    # Check if done
+    CMP offset, n
+    JGE .tile_done
+
+    # Calculate tile size (handle partial last tile)
+    SCALAR remaining = n - offset
+    SCALAR tile_n = MIN(remaining, TILE_SIZE)
+
+    # Calculate addresses
+    SCALAR in_addr = args.input + offset * 4
+    SCALAR out_addr = args.output + offset * 4
+
+    # Load tile
+    DMA_LOAD UB[UB_INPUT : UB_INPUT + tile_n*4], GM[in_addr], tile_n * 4
+    WAIT_DMA
+
+    # Process tile
+    VMULS UB[UB_OUTPUT : UB_OUTPUT + tile_n*4], UB[UB_INPUT : UB_INPUT + tile_n*4], 2.0
+    WAIT_VEC
+
+    # Store tile
+    DMA_STORE GM[out_addr], UB[UB_OUTPUT : UB_OUTPUT + tile_n*4], tile_n * 4
+    WAIT_DMA
+
+    # Next tile
+    ADD offset, offset, TILE_SIZE
+    JMP .tile_loop
+
+.tile_done:
+    RET
+
+
+# ============================================================
+# Kernel: Double Buffering
+# ============================================================
+# Overlap DMA with compute using ping-pong buffers
+
+.kernel ub_double_buffer
+.args {
+    input:   ptr<f32>
+    output:  ptr<f32>
+    count:   i32
+}
+
+.const TILE_SIZE = 8192      # 8K floats per ping/pong buffer
+
+# UB layout:
+#   0-32K:     Input ping (A0)
+#   32K-64K:   Input pong (A1)
+#   64K-96K:   Output ping (B0)
+#   96K-128K:  Output pong (B1)
+
+.const UB_IN_PING   = 0
+.const UB_IN_PONG   = 32768
+.const UB_OUT_PING  = 65536
+.const UB_OUT_PONG  = 98304
+
+SCALAR n = args.count
+SCALAR num_tiles = (n + TILE_SIZE - 1) / TILE_SIZE
+SCALAR tile_idx = 0
+SCALAR active = 0   # 0 = ping, 1 = pong
+
+# Preload first tile
+SCALAR first_addr = args.input
+DMA_LOAD UB[UB_IN_PING : UB_IN_PING + TILE_SIZE*4], GM[first_addr], TILE_SIZE * 4
+WAIT_DMA
+
+.db_loop:
+    CMP tile_idx, num_tiles
+    JGE .db_done
+
+    # Calculate current tile bounds
+    SCALAR offset = tile_idx * TILE_SIZE
+    SCALAR tile_n = MIN(TILE_SIZE, n - offset)
+
+    # Select buffers based on active flag
+    SCALAR in_buf = active == 0 ? UB_IN_PING : UB_IN_PONG
+    SCALAR out_buf = active == 0 ? UB_OUT_PING : UB_OUT_PONG
+    SCALAR next_in_buf = active == 0 ? UB_IN_PONG : UB_IN_PING
+
+    # Start loading NEXT tile (if not last)
+    SCALAR next_tile = tile_idx + 1
+    CMP next_tile, num_tiles
+    JGE .skip_prefetch
+
+    SCALAR next_offset = next_tile * TILE_SIZE
+    SCALAR next_addr = args.input + next_offset * 4
+    DMA_LOAD_ASYNC UB[next_in_buf], GM[next_addr], TILE_SIZE * 4
+
+.skip_prefetch:
+
+    # Process CURRENT tile (overlaps with DMA)
+    VMULS UB[out_buf : out_buf + tile_n*4], UB[in_buf : in_buf + tile_n*4], 2.0
+    WAIT_VEC
+
+    # Store CURRENT tile
+    SCALAR out_addr = args.output + offset * 4
+    DMA_STORE GM[out_addr], UB[out_buf : out_buf + tile_n*4], tile_n * 4
+    WAIT_DMA
+
+    # Ensure next tile load completed
+    WAIT_DMA_ASYNC
+
+    # Toggle ping/pong
+    XOR active, active, 1
+
+    # Next iteration
+    ADD tile_idx, tile_idx, 1
+    JMP .db_loop
+
+.db_done:
+    RET
+
+
+# ============================================================
+# Notes on UB Management
+# ============================================================
+#
+# Alignment:
+#   - All UB addresses should be 32-byte aligned
+#   - ALIGN_UP(addr, 32) for safe allocation
+#
+# Allocation Order:
+#   - Put frequently accessed buffers at lower addresses
+#   - Group related buffers together
+#   - Leave headroom for temporary values
+#
+# Common Patterns:
+#   1. Static: Fixed buffers, simple kernels
+#   2. Tiled: Large data, sequential access
+#   3. Double-buffer: Hide DMA latency
+#   4. Multi-stage: Complex pipelines
+#
+# Debugging Tips:
+#   - Print UB usage at compile time
+#   - Check for buffer overlap
+#   - Verify alignment at runtime (debug builds)

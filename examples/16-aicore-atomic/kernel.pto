@@ -1,0 +1,355 @@
+# PTO-ISA Kernel: AICORE Atomic Operations
+#
+# Demonstrates atomic operations for multi-block coordination
+
+# ============================================================
+# Kernel: Parallel Sum Reduction
+# ============================================================
+# Each block sums a portion, then atomic add to global result
+
+.kernel parallel_sum
+.args {
+    input:      ptr<f32>    # Input array
+    count:      i32         # Number of elements
+    global_sum: ptr<f32>    # Output: single float in HBM
+    num_blocks: i32         # Total number of blocks
+}
+
+# Get this block's ID and work range
+SCALAR block_id = BLOCK_ID()
+SCALAR block_count = args.num_blocks
+
+SCALAR elements_per_block = (args.count + block_count - 1) / block_count
+SCALAR start = block_id * elements_per_block
+SCALAR end = MIN(start + elements_per_block, args.count)
+
+# Skip if no work for this block
+CMP start, args.count
+JGE .done
+
+# ========================================
+# Step 1: Local reduction in UB
+# ========================================
+.const UB_INPUT = 0
+.const TILE_SIZE = 16384    # 16K floats per tile
+
+SCALAR local_sum = 0.0
+SCALAR offset = start
+
+.local_loop:
+    CMP offset, end
+    JGE .local_done
+
+    # Load tile to UB
+    SCALAR tile_n = MIN(TILE_SIZE, end - offset)
+    SCALAR in_addr = args.input + offset * 4
+    DMA_LOAD UB[UB_INPUT : UB_INPUT + tile_n*4], GM[in_addr], tile_n * 4
+    WAIT_DMA
+
+    # Sum this tile using vector reduction
+    VREDUCE_ADD tile_sum, UB[UB_INPUT : UB_INPUT + tile_n*4], tile_n
+    WAIT_VEC
+
+    # Accumulate
+    ADD local_sum, local_sum, tile_sum
+
+    ADD offset, offset, TILE_SIZE
+    JMP .local_loop
+
+.local_done:
+
+# ========================================
+# Step 2: Atomic add to global sum
+# ========================================
+# All blocks contribute their local sums
+
+ATOMIC_ADD_F32 old_val, GM[args.global_sum], local_sum
+# old_val contains the sum before this block's contribution
+# (can be used for debugging/logging if needed)
+
+.done:
+    RET
+
+
+# ============================================================
+# Kernel: Parallel Max Reduction
+# ============================================================
+
+.kernel parallel_max
+.args {
+    input:      ptr<f32>
+    count:      i32
+    global_max: ptr<f32>    # Initialize to -INF before kernel launch
+    num_blocks: i32
+}
+
+SCALAR block_id = BLOCK_ID()
+SCALAR block_count = args.num_blocks
+
+SCALAR elements_per_block = (args.count + block_count - 1) / block_count
+SCALAR start = block_id * elements_per_block
+SCALAR end = MIN(start + elements_per_block, args.count)
+
+CMP start, args.count
+JGE .done
+
+# Local max reduction
+.const UB_INPUT = 0
+.const TILE_SIZE = 16384
+
+SCALAR local_max = -INF
+SCALAR offset = start
+
+.local_loop:
+    CMP offset, end
+    JGE .local_done
+
+    SCALAR tile_n = MIN(TILE_SIZE, end - offset)
+    SCALAR in_addr = args.input + offset * 4
+    DMA_LOAD UB[UB_INPUT], GM[in_addr], tile_n * 4
+    WAIT_DMA
+
+    VREDUCE_MAX tile_max, UB[UB_INPUT], tile_n
+    WAIT_VEC
+
+    MAX local_max, local_max, tile_max
+
+    ADD offset, offset, TILE_SIZE
+    JMP .local_loop
+
+.local_done:
+
+# Atomic max to global
+ATOMIC_MAX_F32 old_val, GM[args.global_max], local_max
+
+.done:
+    RET
+
+
+# ============================================================
+# Kernel: Work Stealing Pattern
+# ============================================================
+# Dynamic work distribution using atomic counter
+
+.kernel work_steal
+.args {
+    input:      ptr<f32>    # Input items
+    output:     ptr<f32>    # Output results
+    count:      i32         # Total items
+    work_idx:   ptr<i32>    # Shared work counter (init to 0)
+}
+
+.const UB_INPUT  = 0
+.const UB_OUTPUT = 65536
+.const BATCH_SIZE = 256     # Claim 256 items at a time
+
+.work_loop:
+    # Atomically claim next batch of work
+    ATOMIC_ADD work_start, GM[args.work_idx], BATCH_SIZE
+
+    # Check if we got valid work
+    CMP work_start, args.count
+    JGE .work_done
+
+    # Calculate actual batch size (may be partial at end)
+    SCALAR work_end = MIN(work_start + BATCH_SIZE, args.count)
+    SCALAR batch_n = work_end - work_start
+
+    # Load input batch
+    SCALAR in_addr = args.input + work_start * 4
+    DMA_LOAD UB[UB_INPUT : UB_INPUT + batch_n*4], GM[in_addr], batch_n * 4
+    WAIT_DMA
+
+    # Process batch (example: square each element)
+    VMUL UB[UB_OUTPUT], UB[UB_INPUT], UB[UB_INPUT], batch_n
+    WAIT_VEC
+
+    # Store output batch
+    SCALAR out_addr = args.output + work_start * 4
+    DMA_STORE GM[out_addr], UB[UB_OUTPUT : UB_OUTPUT + batch_n*4], batch_n * 4
+    WAIT_DMA
+
+    JMP .work_loop
+
+.work_done:
+    RET
+
+
+# ============================================================
+# Kernel: Global Barrier
+# ============================================================
+# Synchronize all blocks at a barrier point
+
+.kernel global_barrier_demo
+.args {
+    data:       ptr<f32>    # Shared data
+    count:      i32
+    barrier:    ptr<i32>    # Barrier counter (init to 0)
+    num_blocks: i32
+}
+
+SCALAR block_id = BLOCK_ID()
+
+# ========================================
+# Phase 1: Each block does independent work
+# ========================================
+SCALAR my_offset = block_id * 1024
+SCALAR my_addr = args.data + my_offset * 4
+
+# Load, process, store (block-local)
+DMA_LOAD UB[0 : 4096], GM[my_addr], 4096
+WAIT_DMA
+
+VMULS UB[0 : 4096], UB[0 : 4096], 2.0
+WAIT_VEC
+
+DMA_STORE GM[my_addr], UB[0 : 4096], 4096
+WAIT_DMA
+
+# ========================================
+# Barrier: Wait for all blocks
+# ========================================
+FENCE                           # Ensure stores visible
+
+# Signal arrival
+ATOMIC_ADD old_count, GM[args.barrier], 1
+
+# Wait for all blocks
+.barrier_wait:
+    LOAD current_count, GM[args.barrier]
+    CMP current_count, args.num_blocks
+    JLT .barrier_wait
+
+FENCE                           # Ensure we see all stores
+
+# ========================================
+# Phase 2: Now safe to read other blocks' data
+# ========================================
+# Each block reads neighbor's processed data
+
+SCALAR neighbor_id = (block_id + 1) % args.num_blocks
+SCALAR neighbor_offset = neighbor_id * 1024
+SCALAR neighbor_addr = args.data + neighbor_offset * 4
+
+DMA_LOAD UB[4096 : 8192], GM[neighbor_addr], 4096
+WAIT_DMA
+
+# Combine local and neighbor data
+VADD UB[0 : 4096], UB[0 : 4096], UB[4096 : 8192]
+WAIT_VEC
+
+# Store final result
+DMA_STORE GM[my_addr], UB[0 : 4096], 4096
+WAIT_DMA
+
+RET
+
+
+# ============================================================
+# Kernel: Hierarchical Reduction
+# ============================================================
+# Two-level reduction for better scalability
+
+.kernel hierarchical_sum
+.args {
+    input:        ptr<f32>
+    count:        i32
+    partial_sums: ptr<f32>   # Array of num_blocks floats
+    final_sum:    ptr<f32>   # Single float result
+    num_blocks:   i32
+}
+
+SCALAR block_id = BLOCK_ID()
+SCALAR block_count = args.num_blocks
+
+# ========================================
+# Level 1: Each block computes local sum
+# ========================================
+SCALAR elements_per_block = (args.count + block_count - 1) / block_count
+SCALAR start = block_id * elements_per_block
+SCALAR end = MIN(start + elements_per_block, args.count)
+
+SCALAR local_sum = 0.0
+
+CMP start, args.count
+JGE .store_partial
+
+.const UB_INPUT = 0
+.const TILE_SIZE = 16384
+
+SCALAR offset = start
+.local_loop:
+    CMP offset, end
+    JGE .local_done
+
+    SCALAR tile_n = MIN(TILE_SIZE, end - offset)
+    DMA_LOAD UB[UB_INPUT], GM[args.input + offset*4], tile_n * 4
+    WAIT_DMA
+
+    VREDUCE_ADD tile_sum, UB[UB_INPUT], tile_n
+    WAIT_VEC
+
+    ADD local_sum, local_sum, tile_sum
+    ADD offset, offset, TILE_SIZE
+    JMP .local_loop
+
+.local_done:
+
+# ========================================
+# Store partial sum (no atomic needed - unique location)
+# ========================================
+.store_partial:
+    SCALAR partial_addr = args.partial_sums + block_id * 4
+    STORE GM[partial_addr], local_sum
+
+    # Signal completion using atomic counter embedded in final_sum location + 4
+    # (In practice, would use separate counter)
+    ATOMIC_ADD old, GM[args.final_sum + 4], 1
+
+# ========================================
+# Level 2: Block 0 reduces partial sums
+# ========================================
+    CMP block_id, 0
+    JNE .done
+
+    # Wait for all blocks to finish
+    .wait_all:
+        LOAD completed, GM[args.final_sum + 4]
+        CMP completed, block_count
+        JLT .wait_all
+
+    # Now reduce partial sums
+    DMA_LOAD UB[0 : block_count*4], GM[args.partial_sums], block_count * 4
+    WAIT_DMA
+
+    VREDUCE_ADD total_sum, UB[0 : block_count*4], block_count
+    WAIT_VEC
+
+    STORE GM[args.final_sum], total_sum
+
+.done:
+    RET
+
+
+# ============================================================
+# Notes on AICORE Atomics
+# ============================================================
+#
+# Supported atomic operations:
+#   ATOMIC_ADD, ATOMIC_SUB, ATOMIC_MAX, ATOMIC_MIN
+#   ATOMIC_AND, ATOMIC_OR, ATOMIC_XOR
+#   ATOMIC_CAS (compare-and-swap)
+#
+# Data types:
+#   - i32, i64 for integer atomics
+#   - f32 for floating-point atomics (hardware support varies)
+#
+# Performance considerations:
+#   - Atomics are slow (~100s of cycles)
+#   - Contention makes them slower (serialization)
+#   - Minimize number of atomic operations
+#   - Use hierarchical patterns for large reductions
+#
+# Memory model:
+#   - Atomics are sequentially consistent with respect to each other
+#   - Use FENCE for ordering with non-atomic operations
