@@ -11,8 +11,10 @@
 #include <iostream>
 #include <runtime/rt.h>
 #include <string>
+#include <sys/types.h>
 #include <vector>
-
+#include "regs.h"
+#include "acl/acl.h"
 /**
  * @brief Kernel arguments for the AICPU kernel
  * @details This structure is used to pass arguments to the AICPU kernel.
@@ -32,10 +34,15 @@
  *   2. DynTileFwkKernelServerInit
  *   3. DynTileFwkKernelServer
  */
+
 struct DeviceArgs {
     uint64_t unused[12] = {0};
     uint64_t aicpuSoBin{0};
     uint64_t aicpuSoLen{0};
+    volatile uint64_t regs{0};
+    uint64_t devId{0};
+    uint64_t coreNum{0};
+    volatile bool fastPath{false};
 };
 
 static int ReadFile(const std::string &path, std::vector<uint8_t> &buf) {//以二进制方式完整读取一个文件的内容到buf
@@ -57,7 +64,6 @@ static int ReadFile(const std::string &path, std::vector<uint8_t> &buf) {//以�
 struct KernelArgs {
     uint64_t unused[5] = {0};
     int64_t *deviceArgs{nullptr};
-    int64_t *hankArgs{nullptr};
 
     int InitDeviceArgs(const DeviceArgs &hostDeviceArgs) {
         // Allocate device memory for deviceArgs
@@ -139,11 +145,6 @@ struct AicpuSoInfo {
     }
 };
 
-struct Handshake {
-    volatile uint32_t aicpu_ready;
-    volatile uint32_t aicore_done;
-};
-
 class DeviceRunner {
   public:
     static DeviceRunner &Get() {
@@ -198,9 +199,9 @@ class DeviceRunner {
         }
 
         struct Args {
-            int64_t *hankArgs;
+            void *deviceArgs;
         };
-        Args args = {kernelArgs->hankArgs};
+        Args args = {kernelArgs->deviceArgs};
         rtArgsEx_t rtArgs;
         std::memset(&rtArgs, 0, sizeof(rtArgs));
         rtArgs.args = &args;
@@ -223,15 +224,15 @@ class DeviceRunner {
             std::cerr << "Error: kernelArgs is null" << '\n';
             return -1;
         }
-
+        // auto rc = LauncherAicoreKernel(streamAicore, kernelArgs);
         // Launch init which save the Aicpu So to device and bind the function names
-        int rc = LaunchAiCpuKernel(streamAicpu, kernelArgs, "DynTileFwkKernelServerInit", 1);
+        auto rc = LaunchAiCpuKernel(streamAicpu, kernelArgs, "DynTileFwkKernelServerInit", 1);
         if (rc != 0) {
             std::cerr << "Error: LaunchAiCpuKernel (init) failed: " << rc << '\n';
             return rc;
         }
 
-        // Launch main kernel
+        // // Launch main kernel
         rc = LaunchAiCpuKernel(streamAicpu, kernelArgs, "DynTileFwkKernelServer", launchAicpuNum);
         if (rc != 0) {
             std::cerr << "Error: LaunchAiCpuKernel (main) failed: " << rc << '\n';
@@ -239,51 +240,62 @@ class DeviceRunner {
         }
 
         rc = LauncherAicoreKernel(streamAicore, kernelArgs);
+        if (rc != 0) {
+            std::cerr << "Error: LaunchAiCcoreKernel failed: " << rc << '\n';
+            return rc;
+        }
 
-        return 0;
+        return rc;
     }
 
   private:
     DeviceRunner() {}
 };
 
-void MvHankArg(KernelArgs& kernelArgs, Handshake& args) {
+void CopyToHost(KernelArgs *kernelArgs) {
+    auto deviceArgs = kernelArgs->deviceArgs;
 
-    void *hankDev = nullptr;
-    int rc = rtMalloc(&hankDev, sizeof(args), RT_MEMORY_HBM, 0);
-    if (rc != 0) {
-        std::cerr << "Error: rtMemcpy failed: " << rc << '\n';
-        rtFree(hankDev);
-        hankDev = nullptr;
+    std::vector<DeviceArgs> output(1);
+    int rc = rtMemcpy(output.data(), sizeof(DeviceArgs), deviceArgs, sizeof(DeviceArgs), RT_MEMCPY_DEVICE_TO_HOST);
+    if (rc !=0) {
+        std::cout << " fail" << std::endl;
+    }
+
+    std::cout << "jieguo: " << output[0].devId << "  " <<output[0].fastPath << std::endl;
+}
+
+void InitDeviceRegsAddr(DeviceArgs& arg) {
+    std::vector<int64_t> host_regs;
+    GetAicoreRegs(host_regs, arg.devId);
+
+    size_t size = host_regs.size() * sizeof(uint64_t);
+    void* reg_ptr = nullptr;
+
+    // 1. 分配 Device 内存
+    int rc = rtMalloc(&reg_ptr, size, RT_MEMORY_HBM, 0);
+    if (rc != RT_ERROR_NONE) {
+        // 处理 rtMalloc 失败
         return;
     }
 
-    rc = rtMemcpy(hankDev, sizeof(args), &args, sizeof(args), RT_MEMCPY_HOST_TO_DEVICE);
-    if (rc != 0) {
-        std::cerr << "Error: rtMemcpy failed: " << rc << '\n';
-        rtFree(hankDev);
-        hankDev = nullptr;
+    // 2. 拷贝 Host 地址值（注意：这些值在 Device 上不可用作指针！）
+    rc = rtMemcpy(reg_ptr, size, host_regs.data(), size, RT_MEMCPY_HOST_TO_DEVICE);
+    if (rc != RT_ERROR_NONE) {
+        rtFree(reg_ptr);
         return;
     }
 
-    kernelArgs.hankArgs = reinterpret_cast<int64_t *>(hankDev);
+    // 3. 保存 Device 内存地址（不是寄存器地址！）
+    arg.regs = reinterpret_cast<uint64_t>(reg_ptr);
+    arg.coreNum = host_regs.size();
+
 }
-
-
-void PrintResult(KernelArgs& kernelArgs) {
-    Handshake host_result;
-    rtMemcpy(&host_result, sizeof(Handshake), kernelArgs.hankArgs, sizeof(Handshake), RT_MEMCPY_DEVICE_TO_HOST);
-    std::cout << host_result.aicore_done << "  " << host_result.aicpu_ready <<std::endl;
-}
-
 // Example usage
 int main(int argc, char **argv) {
     std::cout << "=== Launching Empty AICPU Kernel ===" << '\n';
-
-    Handshake hankArgs = {0, 0};
-
     // Parse device id from main's argument (expected range: 0-15)
     int deviceId = 9;
+
     if (argc > 1) {
         try {
             deviceId = std::stoi(argv[1]);
@@ -296,12 +308,13 @@ int main(int argc, char **argv) {
             return -1;
         }
     }
+
     int devRc = rtSetDevice(deviceId);
+
     if (devRc != 0) {
         std::cerr << "Error: rtSetDevice(" << deviceId << ") failed: " << devRc << '\n';
         return devRc;
     }
-
     rtStream_t streamAicpu = nullptr;
     rtStream_t streamAicore = nullptr;
     int rc = rtStreamCreate(&streamAicpu, 0);
@@ -315,7 +328,6 @@ int main(int argc, char **argv) {
         std::cerr << "Error: rtStreamCreate failed: " << rc << '\n';
         return rc;
     }
-
     std::string soPath = "./Aicpukernel/libtilefwk_backend_server.so";
     AicpuSoInfo soInfo{};
     rc = soInfo.Init(soPath);
@@ -327,15 +339,14 @@ int main(int argc, char **argv) {
         streamAicore = nullptr;
         return rc;
     }
-
     KernelArgs kernelArgs{};
     DeviceArgs deviceArgs{};
     deviceArgs.aicpuSoBin = soInfo.aicpuSoBin;
     deviceArgs.aicpuSoLen = soInfo.aicpuSoLen;
+    deviceArgs.devId = deviceId;
+    InitDeviceRegsAddr(deviceArgs);
+
     rc = kernelArgs.InitDeviceArgs(deviceArgs);
-
-    MvHankArg(kernelArgs, hankArgs);
-
     if (rc != 0) {
         std::cerr << "Error: KernelArgs::InitDeviceArgs failed: " << rc << '\n';
         soInfo.Finalize();
@@ -362,7 +373,8 @@ int main(int argc, char **argv) {
         return rc;
     }
 
-    PrintResult(kernelArgs);
+    CopyToHost(&kernelArgs);
+
     kernelArgs.FinalizeDeviceArgs();
     soInfo.Finalize();
     rtStreamDestroy(streamAicpu);

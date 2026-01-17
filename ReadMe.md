@@ -1,5 +1,5 @@
 # sphinx
-开源文档使用sphinx编译，并放在read the docs上托管。
+开源文档使用sphinx编译，并放在read the docs上托管。建议用github登录read the docs。需在github，setting的Applocations中的Authorized OAuth Apps绑定Read the Docs Community。绑定之后可以在项目中添加仓库绑定分支。
 
 ## 本地使用
 文档源代码以及生成的html存放在docs_spinx目录下。在文档的目录下`make html`编译出hetml，在html的目录中运行`python -m http.server 8000`查看本地html.

@@ -27,6 +27,9 @@ AI Core 与 AI CPU 上的函数存在明显差异：AI Core 函数通常需通�
 AICORE核函数通常使用 extern "C" 按照类C的编译和连接规约来编译和连接，\_\_global\_\_函数类型限定符表示它是一个核函数， \_\_aicore\_\_函数类型限定符表示该核函数在device侧的 AICORE 上执行。
 参数列表中的变量类型限定符 \_\_gm\_\_ ，表明该指针变量指向Global Memory上某处内存地址。
 
+在昇腾编程中，所有指向 global memory 的指针都必须显式声明为 __gm__ T*，即使是转类型换时目标类型也必须带 __gm__，例如
+``auto devArgs = (__gm__ DeviceArgs *)args;``
+
 AI Core 核函数可被编译为两种目标架构：AIC（AI Cube 核） 或 AIV（AI Vector 核），通过动态生成不同的函数名加以区分。
 
 

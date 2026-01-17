@@ -31,12 +31,14 @@ target_compile_options(tile_fwk_server
             -fno-common
             -g
 )
+
 target_include_directories(tile_fwk_server
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}
         PRIVATE
             ${ASCEND_CANN_PACKAGE_PATH}/include
             ${ASCEND_CANN_PACKAGE_PATH}/include/toolchain
+            ${ASCEND_CANN_PACKAGE_PATH}/pkg_inc/base
 )
 target_link_directories(tile_fwk_server
         PRIVATE
@@ -44,4 +46,5 @@ target_link_directories(tile_fwk_server
             ${ASCEND_CANN_PACKAGE_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/devlib/device/
             ${ASCEND_CANN_PACKAGE_PATH}/lib64
 )
+
 set_target_properties(tile_fwk_server PROPERTIES OUTPUT_NAME tilefwk_backend_server)

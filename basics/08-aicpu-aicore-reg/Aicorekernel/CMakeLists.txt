@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16.3)
 
-set(BISHENG_COMPILER "${ASCEND_HOME_PATH}/compiler/ccec_compiler/bin/bisheng")
-set(BISHENG_LD "${ASCEND_HOME_PATH}/compiler/ccec_compiler/bin/ld.lld")
+set(BISHENG_COMPILER "${ASCEND_HOME_PATH}/bin/ccec")
+set(BISHENG_LD "${ASCEND_HOME_PATH}/bin/ld.lld")
 
 set(AICORE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/kernel.cpp)
 set(AICORE_OBJ_AIV ${CMAKE_CURRENT_BINARY_DIR}/kernel_aiv.o)

@@ -28,9 +28,9 @@ target_include_directories(launcher PUBLIC
 # Link CANN runtime (must be available)
 target_include_directories(launcher PRIVATE
     ${ASCEND_HOME_PATH}/include
-    ${ASCEND_HOME_PATH}/include/experiment
-    ${ASCEND_HOME_PATH}/include/experiment/runtime
-    ${ASCEND_HOME_PATH}/include/experiment/msprof
+    ${ASCEND_HOME_PATH}/pkg_inc
+    ${ASCEND_HOME_PATH}/pkg_inc/runtime
+    ${ASCEND_HOME_PATH}/pkg_inc/profiling
 )
 target_link_directories(launcher PRIVATE
     ${ASCEND_HOME_PATH}/lib64
@@ -38,3 +38,6 @@ target_link_directories(launcher PRIVATE
 )
 
 target_link_libraries(launcher PRIVATE runtime)
+
+
+message(STATUS "ASCEND_HOME_PATH = ${ASCEND_HOME_PATH}")

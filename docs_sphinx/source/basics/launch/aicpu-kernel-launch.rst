@@ -89,4 +89,4 @@ LOG组件
 昇腾 CANN 架构强调 Host/Device 隔离，所有通信必须通过受控通道（如日志系统、共享内存、队列），标准 C/C++ 运行时所提供的主机端 I/O 机制（如流式输出、格式化打印等）并不适用于设备执行环境。
 
 是以，Device侧的信息往往通过平台提供的日志接口进行信息的输出。具体实现见 **basics/03-aicpu-kernel/kernel/device_log.cpp**。
-日志的落盘位置为 ``~/ascend/log/debug/device-<device_id>/``。
+日志的落盘位置为 ``~/ascend/log/debug/device-<device_id>/``。设置 `export ASCEND_GLOBAL_LOG_LEVEL=0` 控制Device侧日志等级。
