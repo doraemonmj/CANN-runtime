@@ -5,8 +5,8 @@ This page covers how to load and launch AICPU kernels from host code.
 
 .. seealso::
 
-   :file:`examples/05-calling-interface/main.cpp` for detailed argument struct layout examples
-   that apply to both AICORE and AICPU kernels.
+   See the :doc:`../aicore/calling-interface` page for detailed argument struct layout and
+   alignment rules that apply to both AICORE and AICPU kernels.
 
 Kernel Format
 -------------

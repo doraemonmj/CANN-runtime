@@ -43,27 +43,46 @@ Latencies:
 
 ## Examples Structure
 
-Examples progress from simple to complex, each building on previous concepts:
+Examples progress from simple to complex, each building on previous concepts.
 
-```
-examples/                      # Standalone progressive examples
-  01-device-query/             # Query NPU hardware info
-  02-memory/                   # HBM allocation, H2D/D2H transfers
-  03-stream/                   # Asynchronous execution streams
-  04-kernel/                   # Kernel calling interface (TODO)
-  05-calling-interface/        # Argument packing patterns (TODO)
-  06-aicpu-basic/              # AICPU kernel execution (TODO)
-  ...
-  11-aicore-basic/             # AICORE kernel execution (TODO)
-  12-cube-matmul/              # Matrix multiplication (TODO)
-  ...
-  18-sync-register/            # Register synchronization (TODO)
-  19-sync-atomic/              # Atomic coordination (TODO)
-  20-sync-queue/               # Queue-based coordination (TODO)
-```
+### Status Legend
+- ✅ **Complete**: Code + Example README + ReadTheDocs + Direct ACL APIs
+- 🟢 **Functional**: Code + ReadTheDocs (missing example README or using platform layer)
+- 🚧 **In Progress**: Partial implementation
+- ❌ **Not Started**: Planned but not implemented
 
-**Status**: Examples 01-03 converted to direct ACL APIs ✅
-**Todo**: Examples 04-20 still use platform layer (deferred)
+### Example List
+
+| Example | Concept | Documentation | Status |
+|---------|---------|---------------|--------|
+| **Getting Started** | | | |
+| [01-device-query](examples/01-device-query/) | Query NPU hardware info (devices, cores, memory) | [docs](docs/getting-started/device-query.rst) | ✅ |
+| [02-memory](examples/02-memory/) | HBM allocation, H2D/D2H transfers | [docs](docs/getting-started/memory.rst) | ✅ |
+| [03-stream](examples/03-stream/) | Asynchronous execution streams | [docs](docs/getting-started/streams.rst) | ✅ |
+| **AICPU Programming** | | | |
+| [04-aicpu-basic](examples/04-aicpu-basic/) | Basic AICPU kernel execution (.so loading) | [docs](docs/aicpu/kernel-launch.rst) | 🟢 |
+| [05-aicpu-scale](examples/05-aicpu-scale/) | Complete AICPU launch workflow | [docs](docs/aicpu/kernel-launch.rst) | 🟢 |
+| [06-aicpu-logging](examples/06-aicpu-logging/) | Debug output and error handling | [docs](docs/aicpu/logging.rst) | 🟢 |
+| [07-aicpu-atomic](examples/07-aicpu-atomic/) | Multi-core synchronization with atomics | [docs](docs/aicpu/atomic.rst) | 🟢 |
+| [08-aicpu-queue](examples/08-aicpu-queue/) | Lock-free queues (SPSC/MPMC) | [docs](docs/aicpu/queue.rst) | 🟢 |
+| **AICORE Programming** | | | |
+| [09-aicore-basic](examples/09-aicore-basic/) | AICORE architecture and execution model | [docs](docs/aicore/overview.rst) | 🟢 |
+| [10-cube-matmul](examples/10-cube-matmul/) | Cube unit matrix multiplication (MMAD) | [docs](docs/aicore/cube-unit/compute.rst) | 🟢 |
+| [11-cube-memory](examples/11-cube-memory/) | L1/L0A/B/C buffer management for Cube | [docs](docs/aicore/cube-unit/l0l1-allocation.rst) | 🟢 |
+| [12-vector-simd](examples/12-vector-simd/) | Vector unit SIMD operations | [docs](docs/aicore/vector-unit/compute.rst) | 🟢 |
+| [13-vector-ub](examples/13-vector-ub/) | UB (Unified Buffer) memory management | [docs](docs/aicore/vector-unit/ub-allocation.rst) | 🟢 |
+| [14-aicore-atomic](examples/14-aicore-atomic/) | Multi-block atomic operations | [docs](docs/aicore/atomic.rst) | 🟢 |
+| [15-aicore-pmu](examples/15-aicore-pmu/) | Performance Monitoring Unit (profiling) | [docs](docs/aicore/pmu.rst) | 🟢 |
+| **Cross-Processor Synchronization** | | | |
+| [16-sync-register](examples/16-sync-register/) | Register-based AICPU↔AICORE sync | [docs](docs/synchronization/register.rst) | 🟢 |
+| [17-sync-atomic](examples/17-sync-atomic/) | HBM atomic-based coordination | [docs](docs/synchronization/atomic.rst) | 🟢 |
+| [18-sync-queue](examples/18-sync-queue/) | Queue-based data passing | [docs](docs/synchronization/queue.rst) | 🟢 |
+
+### Current Progress
+- **Code**: 18 examples implemented ✅ (01-18, continuous numbering)
+- **ReadTheDocs**: 20/20 pages complete ✅ (docs remain complete)
+- **Example READMEs**: 3 complete (01-03) 🚧
+- **Direct ACL APIs**: 3 converted (01-03) 🚧
 
 ## Philosophy
 

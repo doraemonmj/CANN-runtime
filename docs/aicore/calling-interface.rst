@@ -4,14 +4,12 @@ Kernel Calling Interface
 This page covers the interface between host code and kernel code:
 argument packing, alignment rules, and memory address types.
 
-Example Code
-------------
+Overview
+--------
 
-Full source: :file:`examples/05-calling-interface/main.cpp`
-
-.. literalinclude:: ../../examples/05-calling-interface/main.cpp
-   :language: cpp
-   :caption: Calling Interface Example (05-calling-interface/main.cpp)
+The calling interface defines how the host code passes arguments to kernels. This applies to
+both AICPU and AICORE kernels. For practical examples, see :file:`examples/04-aicpu-basic/`
+and later examples which demonstrate real argument passing.
 
 Argument Struct Layout
 ----------------------

@@ -190,17 +190,17 @@ Performance Tips
 Example Code
 ------------
 
-Full working example: :file:`examples/09-aicpu-atomic/`
+Full working example: :file:`examples/07-aicpu-atomic/`
 
 Host code demonstrating atomic patterns:
 
-.. literalinclude:: ../../examples/09-aicpu-atomic/main.cpp
+.. literalinclude:: ../../examples/07-aicpu-atomic/main.cpp
    :language: cpp
-   :caption: 09-aicpu-atomic/main.cpp
+   :caption: 07-aicpu-atomic/main.cpp
    :lines: 1-80
 
 AICPU kernel with atomic operations:
 
-.. literalinclude:: ../../examples/09-aicpu-atomic/kernel/atomic_counter.cpp
+.. literalinclude:: ../../examples/07-aicpu-atomic/kernel/atomic_counter.cpp
    :language: cpp
-   :caption: 09-aicpu-atomic/kernel/atomic_counter.cpp
+   :caption: 07-aicpu-atomic/kernel/atomic_counter.cpp

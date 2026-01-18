@@ -3,16 +3,12 @@ AICORE Kernel Launch
 
 Launching AICORE kernels from host code.
 
-Example Code
-------------
+Overview
+--------
 
-Full source: :file:`examples/04-kernel/main.cpp`
-
-.. literalinclude:: ../../examples/04-kernel/main.cpp
-   :language: cpp
-   :caption: Kernel Launch Example (04-kernel/main.cpp)
-
-See also: :file:`examples/05-calling-interface/main.cpp` for detailed argument packing examples.
+This page covers the conceptual foundation of AICORE kernel launching. For practical examples,
+see the AICPU examples starting with :file:`examples/04-aicpu-basic/` which demonstrate real
+kernel loading and execution.
 
 Kernel Format
 -------------

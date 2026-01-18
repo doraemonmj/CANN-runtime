@@ -206,17 +206,17 @@ When to Use AICORE
 Example Code
 ------------
 
-Full working example: :file:`examples/11-aicore-basic/`
+Full working example: :file:`examples/09-aicore-basic/`
 
 Host code (launches AICORE kernel):
 
-.. literalinclude:: ../../examples/11-aicore-basic/main.cpp
+.. literalinclude:: ../../examples/09-aicore-basic/main.cpp
    :language: cpp
-   :caption: 11-aicore-basic/main.cpp
+   :caption: 09-aicore-basic/main.cpp
    :lines: 1-80
 
 AICORE kernel (PTO-ISA):
 
-.. literalinclude:: ../../examples/11-aicore-basic/kernel.pto
+.. literalinclude:: ../../examples/09-aicore-basic/kernel.pto
    :language: text
-   :caption: 11-aicore-basic/kernel.pto
+   :caption: 09-aicore-basic/kernel.pto

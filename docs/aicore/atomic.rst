@@ -167,17 +167,17 @@ Atomic operations have implicit memory ordering:
 Example Code
 ------------
 
-Full working example: :file:`examples/16-aicore-atomic/`
+Full working example: :file:`examples/14-aicore-atomic/`
 
 Host code demonstrating multi-block atomics:
 
-.. literalinclude:: ../../examples/16-aicore-atomic/main.cpp
+.. literalinclude:: ../../examples/14-aicore-atomic/main.cpp
    :language: cpp
-   :caption: 16-aicore-atomic/main.cpp
+   :caption: 14-aicore-atomic/main.cpp
    :lines: 1-80
 
 AICORE atomic operations kernel (PTO-ISA):
 
-.. literalinclude:: ../../examples/16-aicore-atomic/kernel.pto
+.. literalinclude:: ../../examples/14-aicore-atomic/kernel.pto
    :language: text
-   :caption: 16-aicore-atomic/kernel.pto
+   :caption: 14-aicore-atomic/kernel.pto

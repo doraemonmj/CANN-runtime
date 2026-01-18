@@ -184,17 +184,17 @@ For visual profiling, use MindStudio:
 Example Code
 ------------
 
-Full working example: :file:`examples/17-aicore-pmu/`
+Full working example: :file:`examples/15-aicore-pmu/`
 
 Host code demonstrating PMU profiling:
 
-.. literalinclude:: ../../examples/17-aicore-pmu/main.cpp
+.. literalinclude:: ../../examples/15-aicore-pmu/main.cpp
    :language: cpp
-   :caption: 17-aicore-pmu/main.cpp
+   :caption: 15-aicore-pmu/main.cpp
    :lines: 1-80
 
 AICORE kernel with PMU instrumentation (PTO-ISA):
 
-.. literalinclude:: ../../examples/17-aicore-pmu/kernel.pto
+.. literalinclude:: ../../examples/15-aicore-pmu/kernel.pto
    :language: text
-   :caption: 17-aicore-pmu/kernel.pto
+   :caption: 15-aicore-pmu/kernel.pto

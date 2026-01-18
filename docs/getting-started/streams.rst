@@ -175,7 +175,7 @@ Synchronization Patterns
    aclrtCreateStream(&stream);
 
    aclrtMemcpyAsync(dev_input, host_input, size, ACL_MEMCPY_HOST_TO_DEVICE, stream);
-   // Launch kernel on stream (covered in example 04-kernel)
+   // Launch kernel on stream (kernel launching covered in later examples)
    aclrtSynchronizeStream(stream);  // Wait for kernel to complete
    aclrtMemcpyAsync(host_output, dev_output, size, ACL_MEMCPY_DEVICE_TO_HOST, stream);
    aclrtSynchronizeStream(stream);  // Wait for D2H transfer

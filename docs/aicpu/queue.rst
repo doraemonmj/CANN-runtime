@@ -235,17 +235,17 @@ Performance Considerations
 Example Code
 ------------
 
-Full working example: :file:`examples/10-aicpu-queue/`
+Full working example: :file:`examples/08-aicpu-queue/`
 
 Host code demonstrating queue patterns:
 
-.. literalinclude:: ../../examples/10-aicpu-queue/main.cpp
+.. literalinclude:: ../../examples/08-aicpu-queue/main.cpp
    :language: cpp
-   :caption: 10-aicpu-queue/main.cpp
+   :caption: 08-aicpu-queue/main.cpp
    :lines: 1-80
 
 AICPU producer/consumer kernels:
 
-.. literalinclude:: ../../examples/10-aicpu-queue/kernel/queue_kernels.cpp
+.. literalinclude:: ../../examples/08-aicpu-queue/kernel/queue_kernels.cpp
    :language: cpp
-   :caption: 10-aicpu-queue/kernel/queue_kernels.cpp
+   :caption: 08-aicpu-queue/kernel/queue_kernels.cpp

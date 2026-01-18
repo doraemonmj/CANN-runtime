@@ -71,4 +71,4 @@ Step 7: Cleanup...
 ```
 
 ## Next Steps
-See [`../04-kernel/`](../04-kernel/) to learn about the kernel calling interface and launching device code.
+See [`../04-aicpu-basic/`](../04-aicpu-basic/) to learn about kernel loading and execution with real AICPU kernel code.

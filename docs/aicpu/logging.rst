@@ -164,17 +164,17 @@ Best Practices
 Example Code
 ------------
 
-Full working example: :file:`examples/08-aicpu-logging/`
+Full working example: :file:`examples/06-aicpu-logging/`
 
 Host code demonstrating logging patterns:
 
-.. literalinclude:: ../../examples/08-aicpu-logging/main.cpp
+.. literalinclude:: ../../examples/06-aicpu-logging/main.cpp
    :language: cpp
-   :caption: 08-aicpu-logging/main.cpp
+   :caption: 06-aicpu-logging/main.cpp
    :lines: 1-80
 
 AICPU kernel with debug logging:
 
-.. literalinclude:: ../../examples/08-aicpu-logging/kernel/debug_kernel.cpp
+.. literalinclude:: ../../examples/06-aicpu-logging/kernel/debug_kernel.cpp
    :language: cpp
-   :caption: 08-aicpu-logging/kernel/debug_kernel.cpp
+   :caption: 06-aicpu-logging/kernel/debug_kernel.cpp

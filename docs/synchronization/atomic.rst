@@ -200,23 +200,23 @@ Performance Tips
 Example Code
 ------------
 
-Full working example: :file:`examples/19-sync-atomic/`
+Full working example: :file:`examples/17-sync-atomic/`
 
 Host code demonstrating atomic-based synchronization:
 
-.. literalinclude:: ../../examples/19-sync-atomic/main.cpp
+.. literalinclude:: ../../examples/17-sync-atomic/main.cpp
    :language: cpp
-   :caption: 19-sync-atomic/main.cpp
+   :caption: 17-sync-atomic/main.cpp
    :lines: 1-80
 
 AICPU monitor kernel:
 
-.. literalinclude:: ../../examples/19-sync-atomic/aicpu_kernel/monitor.cpp
+.. literalinclude:: ../../examples/17-sync-atomic/aicpu_kernel/monitor.cpp
    :language: cpp
-   :caption: 19-sync-atomic/aicpu_kernel/monitor.cpp
+   :caption: 17-sync-atomic/aicpu_kernel/monitor.cpp
 
 AICORE kernel with atomics (PTO-ISA):
 
-.. literalinclude:: ../../examples/19-sync-atomic/aicore_kernel.pto
+.. literalinclude:: ../../examples/17-sync-atomic/aicore_kernel.pto
    :language: text
-   :caption: 19-sync-atomic/aicore_kernel.pto
+   :caption: 17-sync-atomic/aicore_kernel.pto

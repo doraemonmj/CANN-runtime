@@ -140,17 +140,17 @@ Performance Considerations
 Example Code
 ------------
 
-Full working example: :file:`examples/06-aicpu-basic/`
+Full working example: :file:`examples/04-aicpu-basic/`
 
 Host code (launches AICPU kernel):
 
-.. literalinclude:: ../../examples/06-aicpu-basic/main.cpp
+.. literalinclude:: ../../examples/04-aicpu-basic/main.cpp
    :language: cpp
-   :caption: 06-aicpu-basic/main.cpp
+   :caption: 04-aicpu-basic/main.cpp
    :lines: 1-80
 
 AICPU kernel implementation:
 
-.. literalinclude:: ../../examples/06-aicpu-basic/kernel/scale_kernel.cpp
+.. literalinclude:: ../../examples/04-aicpu-basic/kernel/scale_kernel.cpp
    :language: cpp
-   :caption: 06-aicpu-basic/kernel/scale_kernel.cpp
+   :caption: 04-aicpu-basic/kernel/scale_kernel.cpp
