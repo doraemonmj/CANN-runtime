@@ -21,14 +21,17 @@ Data must be in HBM before kernels can operate on it. The `aclrtMemcpy()` functi
 - `aclInit()` - Initializes the ACL runtime (see [main.cpp:29](main.cpp#L29))
 - `aclrtSetDevice()` - Sets the active NPU device (see [main.cpp:36](main.cpp#L36))
 - `aclrtCreateContext()` - Creates a device context for operations (see [main.cpp:45](main.cpp#L45))
-- `aclrtMalloc()` - Allocates HBM memory on the device (see [main.cpp:80](main.cpp#L80))
-- `aclrtMemcpy()` - Copies data between host and device synchronously (see [main.cpp:95](main.cpp#L95) and [main.cpp:112](main.cpp#L112))
-  - `ACL_MEMCPY_HOST_TO_DEVICE` - Host → Device transfer
-  - `ACL_MEMCPY_DEVICE_TO_HOST` - Device → Host transfer
-- `aclrtFree()` - Frees device memory (see [main.cpp:151](main.cpp#L151))
-- `aclrtDestroyContext()` - Destroys the device context (see [main.cpp:154](main.cpp#L154))
-- `aclrtResetDevice()` - Resets the device (see [main.cpp:155](main.cpp#L155))
-- `aclFinalize()` - Cleans up ACL runtime (see [main.cpp:156](main.cpp#L156))
+- `aclrtMalloc()` - Allocates HBM memory on the device (see [main.cpp:85](main.cpp#L85))
+  - `ACL_MEM_MALLOC_HUGE_FIRST` - Allocates using 2MB huge pages for better TLB efficiency
+  - Returns a device pointer (not directly accessible from host code)
+- `aclrtMemcpy()` - **Synchronously** copies data between host and device, blocking until transfer completes (see [main.cpp:106](main.cpp#L106) and [main.cpp:128](main.cpp#L128))
+  - `ACL_MEMCPY_HOST_TO_DEVICE` - Host → Device transfer via DMA over PCIe
+  - `ACL_MEMCPY_DEVICE_TO_HOST` - Device → Host transfer via DMA over PCIe
+  - For asynchronous transfers, see `aclrtMemcpyAsync()` in example 03-stream
+- `aclrtFree()` - Frees device memory (see [main.cpp:162](main.cpp#L162))
+- `aclrtDestroyContext()` - Destroys the device context (see [main.cpp:165](main.cpp#L165))
+- `aclrtResetDevice()` - Resets the device (see [main.cpp:166](main.cpp#L166))
+- `aclFinalize()` - Cleans up ACL runtime (see [main.cpp:167](main.cpp#L167))
 
 ## Running
 ```bash

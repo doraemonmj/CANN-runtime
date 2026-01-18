@@ -349,5 +349,5 @@ Best Practices
 Next Steps
 ----------
 
-See :doc:`memory-basics` to learn about HBM allocation, host-device memory
+See :doc:`memory` to learn about HBM allocation, host-device memory
 transfers, and the memory hierarchy in practice.

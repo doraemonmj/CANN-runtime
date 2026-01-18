@@ -74,7 +74,12 @@ int main() {
            host_src[0], host_src[1], host_src[2], host_src[ARRAY_SIZE-1]);
     printf("\n");
 
-    /* Step 3: Allocate device (HBM) memory */
+    /* Step 3: Allocate device (HBM) memory
+     *
+     * Hardware: HBM is physically separate from host RAM, located on the NPU card.
+     * The ACL_MEM_MALLOC_HUGE_FIRST flag requests 2MB huge pages for better TLB
+     * efficiency. Memory is allocated from the device's HBM pool (32-64GB capacity).
+     */
     printf("Step 3: Allocate device memory...\n");
     void* dev_buf = nullptr;
     ret = aclrtMalloc(&dev_buf, ARRAY_SIZE * sizeof(float), ACL_MEM_MALLOC_HUGE_FIRST);
@@ -90,7 +95,13 @@ int main() {
     printf("  Allocated %zu bytes on device (HBM)\n", ARRAY_SIZE * sizeof(float));
     printf("  Device pointer: %p\n\n", dev_buf);
 
-    /* Step 4: Copy data from host to device */
+    /* Step 4: Copy data from host to device
+     *
+     * Hardware: Data transfer happens via DMA (Direct Memory Access) over PCIe.
+     * The PCIe link provides ~32 GB/s bandwidth (PCIe 4.0 x16). aclrtMemcpy() is
+     * SYNCHRONOUS - it blocks until the DMA transfer completes. For async transfers,
+     * use aclrtMemcpyAsync() with streams (see example 03-stream).
+     */
     printf("Step 4: Copy host -> device (H2D)...\n");
     ret = aclrtMemcpy(dev_buf, ARRAY_SIZE * sizeof(float),
                       host_src, ARRAY_SIZE * sizeof(float),
@@ -107,7 +118,12 @@ int main() {
     }
     printf("  Copied %zu bytes to device\n\n", ARRAY_SIZE * sizeof(float));
 
-    /* Step 5: Copy data from device to host */
+    /* Step 5: Copy data from device to host
+     *
+     * Hardware: Reverse DMA transfer from HBM back to host RAM via PCIe.
+     * Same synchronous behavior as H2D - blocks until transfer completes.
+     * In production, minimize D2H transfers as they're bandwidth-limited.
+     */
     printf("Step 5: Copy device -> host (D2H)...\n");
     ret = aclrtMemcpy(host_dst, ARRAY_SIZE * sizeof(float),
                       dev_buf, ARRAY_SIZE * sizeof(float),
@@ -124,7 +140,12 @@ int main() {
     }
     printf("  Copied %zu bytes from device\n\n", ARRAY_SIZE * sizeof(float));
 
-    /* Step 6: Verify data */
+    /* Step 6: Verify data
+     *
+     * Round-trip verification: host → device → host. If data matches, we've
+     * confirmed that HBM allocation and DMA transfers work correctly. This is
+     * a common pattern for validating memory operations.
+     */
     printf("Step 6: Verify data...\n");
     printf("  Result data: [%.1f, %.1f, %.1f, ... %.1f]\n",
            host_dst[0], host_dst[1], host_dst[2], host_dst[ARRAY_SIZE-1]);
