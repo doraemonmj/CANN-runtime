@@ -230,23 +230,23 @@ Best Practices
 Example Code
 ------------
 
-Full working example: :file:`examples/18-sync-queue/`
+Full working example: :file:`examples/18-aicpu-aicore-queue/`
 
 Host code demonstrating queue-based data passing:
 
-.. literalinclude:: ../../examples/18-sync-queue/main.cpp
+.. literalinclude:: ../../examples/18-aicpu-aicore-queue/main.cpp
    :language: cpp
-   :caption: 18-sync-queue/main.cpp
+   :caption: 18-aicpu-aicore-queue/main.cpp
    :lines: 1-80
 
 AICPU producer kernel:
 
-.. literalinclude:: ../../examples/18-sync-queue/aicpu_kernel/producer.cpp
+.. literalinclude:: ../../examples/18-aicpu-aicore-queue/aicpu_kernel/producer.cpp
    :language: cpp
-   :caption: 18-sync-queue/aicpu_kernel/producer.cpp
+   :caption: 18-aicpu-aicore-queue/aicpu_kernel/producer.cpp
 
 AICORE consumer kernel (PTO-ISA):
 
-.. literalinclude:: ../../examples/18-sync-queue/aicore_kernel.pto
+.. literalinclude:: ../../examples/18-aicpu-aicore-queue/aicore_kernel.pto
    :language: text
-   :caption: 18-sync-queue/aicore_kernel.pto
+   :caption: 18-aicpu-aicore-queue/aicore_kernel.pto

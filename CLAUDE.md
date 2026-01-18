@@ -21,16 +21,19 @@ This is a **pure learning resource**. Each example demonstrates one hardware con
 ## Hardware Model (Simplified)
 
 ```
-1A + 4B + 24C + 48D
-
-A: Host CPU
-B: Device AICPU (control CPU, close to accelerator)
-C: AICORE (weak CPU + DSA/SIMD)
-D: AICORE (weak CPU + DSA/SIMD)
+Host CPU
+  ↓ PCIe (~3μs)
+AICPU (control CPU, coordinates AICore blocks)
+  ↓ On-chip (~0μs)
+AICore Blocks (24 blocks, each containing):
+  - 1 Cube Core (matrix operations)
+  - 2 Vector Cores (element-wise SIMD)
+  - 1 Scalar Unit (control flow)
+  - Shared L1 Buffer
 
 Latencies:
-  A → B/C/D: 3μs
-  B → C/D: ~0μs (tightly coupled)
+  Host CPU → AICPU/AICore: ~3μs (PCIe transfer)
+  AICPU → AICore:          ~0μs (tightly coupled on-chip)
 ```
 
 ## Core Constraints

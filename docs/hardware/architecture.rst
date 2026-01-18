@@ -1,47 +1,48 @@
 Architecture Overview
 =====================
 
-Simplified Model: 1A + 4B + 24C + 48D
--------------------------------------
-
-We use a simplified notation to describe Ascend architecture:
+Hardware Components
+-------------------
 
 .. code-block:: text
 
-   1A  = 1 Host CPU
-   4B  = Multiple AICPU (control processors)
-   24C = 24 AICORE blocks (each with Cube unit)
-   48D = 48 Vector units (2 per AICORE)
+   Host CPU
+     ↓ PCIe (~3μs)
+   Device:
+     ├── AICPU (control processors, ARM-based)
+     │    ↓ On-chip (~0μs)
+     └── AICore Blocks (24 blocks)
+          Each block contains:
+          - 1 Cube Core (matrix ops)
+          - 2 Vector Cores (SIMD ops)
+          - 1 Scalar Unit (control)
+          - Shared L1 Buffer (1MB)
 
-.. list-table:: Component Latencies
+.. list-table:: Latency Summary
    :header-rows: 1
-   :widths: 15 40 25 20
 
-   * - Unit
-     - Description
-     - Latency from A
-     - Latency from B
-   * - A
-     - Host CPU
-     - —
-     - 3μs
-   * - B
-     - AICPU (ARM cores)
-     - 3μs
-     - —
-   * - C
-     - AIC (Cube/Matrix unit)
-     - 3μs
+   * - From
+     - To
+     - Latency
+     - Notes
+   * - Host CPU
+     - AICPU
+     - ~3μs
+     - PCIe transfer
+   * - Host CPU
+     - AICore
+     - ~3μs
+     - PCIe transfer
+   * - AICPU
+     - AICore
      - ~0μs
-   * - D
-     - AIV (Vector unit)
-     - 3μs
-     - ~0μs
+     - Tightly coupled on-chip
 
 .. note::
 
-   B → C/D latency is near zero because AICPU and AICORE are tightly coupled
-   on the same chip.
+   AICPU and AICore are tightly coupled on the same chip, enabling near-zero
+   latency coordination. AICPU controls AICore execution through shared registers,
+   atomics, and queues.
 
 AICORE Architecture
 -------------------
@@ -121,8 +122,8 @@ Kernels are launched from host and execute on device:
 
 .. code-block:: text
 
-   Host (A)                    Device (B + C + D)
-   ────────                    ──────────────────
+   Host CPU                    Device (AICPU + AICore)
+   ────────                    ───────────────────────
        │
        │  1. platform_init()
        │─────────────────────────► Initialize runtime
@@ -139,7 +140,7 @@ Kernels are launched from host and execute on device:
        │                                ▼
        │                          ┌──────────┐
        │                          │ AICPU or │
-       │                          │ AICORE   │
+       │                          │ AICore   │
        │                          │ executes │
        │                          └──────────┘
        │                                │

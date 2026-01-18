@@ -23,16 +23,19 @@ This is a **learning resource** that teaches Ascend NPU programming through mini
 ## Hardware Architecture (Simplified)
 
 ```
-1A + 4B + 24C + 48D
-
-A: Host CPU
-B: Device AICPU (control CPU, close to accelerator)
-C: AICORE (Cube matrix + Vector SIMD units)
-D: AICORE (Cube matrix + Vector SIMD units)
+Host CPU
+  ↓ PCIe (~3μs)
+AICPU (control CPU, coordinates AICore blocks)
+  ↓ On-chip (~0μs)
+AICore Blocks (24 blocks, each containing):
+  - 1 Cube Core (matrix operations)
+  - 2 Vector Cores (element-wise SIMD)
+  - 1 Scalar Unit (control flow)
+  - Shared L1 Buffer
 
 Latencies:
-  A → B/C/D: ~3μs  (Host to device via PCIe)
-  B → C/D:   ~0μs  (Tightly coupled control to compute)
+  Host CPU → AICPU/AICore: ~3μs (PCIe transfer)
+  AICPU → AICore:          ~0μs (tightly coupled on-chip)
 ```
 
 **Memory Hierarchy:**
@@ -73,10 +76,10 @@ Examples progress from simple to complex, each building on previous concepts.
 | [13-vector-ub](examples/13-vector-ub/) | UB (Unified Buffer) memory management | [docs](docs/aicore/vector-unit/ub-allocation.rst) | 🟢 |
 | [14-aicore-atomic](examples/14-aicore-atomic/) | Multi-block atomic operations | [docs](docs/aicore/atomic.rst) | 🟢 |
 | [15-aicore-pmu](examples/15-aicore-pmu/) | Performance Monitoring Unit (profiling) | [docs](docs/aicore/pmu.rst) | 🟢 |
-| **Cross-Processor Synchronization** | | | |
-| [16-sync-register](examples/16-sync-register/) | Register-based AICPU↔AICORE sync | [docs](docs/synchronization/register.rst) | 🟢 |
-| [17-sync-atomic](examples/17-sync-atomic/) | HBM atomic-based coordination | [docs](docs/synchronization/atomic.rst) | 🟢 |
-| [18-sync-queue](examples/18-sync-queue/) | Queue-based data passing | [docs](docs/synchronization/queue.rst) | 🟢 |
+| **AICPU-AICORE Coordination** | | | |
+| [16-aicpu-aicore-register](examples/16-aicpu-aicore-register/) | Register-based AICPU↔AICORE coordination | [docs](docs/synchronization/register.rst) | 🟢 |
+| [17-aicpu-aicore-atomic](examples/17-aicpu-aicore-atomic/) | HBM atomic-based coordination | [docs](docs/synchronization/atomic.rst) | 🟢 |
+| [18-aicpu-aicore-queue](examples/18-aicpu-aicore-queue/) | Queue-based data passing | [docs](docs/synchronization/queue.rst) | 🟢 |
 
 ### Current Progress
 - **Code**: 18 examples implemented ✅ (01-18, continuous numbering)

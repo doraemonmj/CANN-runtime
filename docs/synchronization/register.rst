@@ -183,23 +183,23 @@ Best Practices
 Example Code
 ------------
 
-Full working example: :file:`examples/16-sync-register/`
+Full working example: :file:`examples/16-aicpu-aicore-register/`
 
 Host code demonstrating register-based synchronization:
 
-.. literalinclude:: ../../examples/16-sync-register/main.cpp
+.. literalinclude:: ../../examples/16-aicpu-aicore-register/main.cpp
    :language: cpp
-   :caption: 16-sync-register/main.cpp
+   :caption: 16-aicpu-aicore-register/main.cpp
    :lines: 1-80
 
 AICPU producer kernel:
 
-.. literalinclude:: ../../examples/16-sync-register/aicpu_kernel/producer.cpp
+.. literalinclude:: ../../examples/16-aicpu-aicore-register/aicpu_kernel/producer.cpp
    :language: cpp
-   :caption: 16-sync-register/aicpu_kernel/producer.cpp
+   :caption: 16-aicpu-aicore-register/aicpu_kernel/producer.cpp
 
 AICORE consumer kernel (PTO-ISA):
 
-.. literalinclude:: ../../examples/16-sync-register/aicore_kernel.pto
+.. literalinclude:: ../../examples/16-aicpu-aicore-register/aicore_kernel.pto
    :language: text
-   :caption: 16-sync-register/aicore_kernel.pto
+   :caption: 16-aicpu-aicore-register/aicore_kernel.pto
