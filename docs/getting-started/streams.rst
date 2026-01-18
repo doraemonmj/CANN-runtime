@@ -33,135 +33,206 @@ Concepts
 Default Stream
 --------------
 
-A default stream is created during ``platform_init()``. Pass ``NULL`` to
-use it:
+Every context can have multiple streams. You create streams explicitly
+with ``aclrtCreateStream()``:
 
 .. code-block:: cpp
 
-   platform_init(0);
+   // Initialize ACL and create context
+   aclInit(nullptr);
+   aclrtSetDevice(0);
+   aclrtContext context;
+   aclrtCreateContext(&context, 0);
 
-   // These use the default stream
-   platform_memcpy_h2d(dev_dst, host_src, size);  // implicit default stream
-   platform_kernel_launch(kernel, blocks, args, size, NULL);  // explicit NULL
-   platform_stream_sync(NULL);  // sync default stream
+   // Create a stream for this context
+   aclrtStream stream;
+   aclrtCreateStream(&stream);
+
+   // Use the stream for async operations (covered in later examples)
+   // aclrtMemcpyAsync(dev_dst, host_src, size, ACL_MEMCPY_HOST_TO_DEVICE, stream);
+
+   // Synchronize and cleanup
+   aclrtSynchronizeStream(stream);
+   aclrtDestroyStream(stream);
 
 Custom Streams
 --------------
 
-Create custom streams for concurrent execution:
+Create multiple streams for concurrent execution:
 
 .. code-block:: cpp
 
-   PlatformStream stream1 = platform_stream_create();
-   PlatformStream stream2 = platform_stream_create();
+   aclrtStream stream1;
+   aclrtStream stream2;
+   aclrtCreateStream(&stream1);
+   aclrtCreateStream(&stream2);
 
    // Launch work on different streams (can run in parallel)
-   platform_kernel_launch(kernel_a, 4, args_a, sizeof(args_a), stream1);
-   platform_kernel_launch(kernel_b, 4, args_b, sizeof(args_b), stream2);
+   // These would be actual async operations in a real program:
+   // aclrtMemcpyAsync(..., stream1);
+   // aclrtLaunchKernel(..., stream2);  // (kernel launch covered in later examples)
 
-   // Wait for both
-   platform_stream_sync(stream1);
-   platform_stream_sync(stream2);
+   // Wait for both streams to complete
+   aclrtSynchronizeStream(stream1);
+   aclrtSynchronizeStream(stream2);
 
    // Cleanup
-   platform_stream_destroy(stream1);
-   platform_stream_destroy(stream2);
+   aclrtDestroyStream(stream1);
+   aclrtDestroyStream(stream2);
 
 API Reference
 -------------
 
-``platform_stream_create``
+``aclrtCreateStream``
+^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: cpp
+
+   aclError aclrtCreateStream(aclrtStream *stream);
+
+Create a new stream for asynchronous operations.
+
+**Parameters:**
+
+- ``stream``: Pointer to receive the stream handle
+
+**Returns:**
+
+- ``ACL_SUCCESS`` (0) on success
+- Error code on failure
+
+**Hardware behavior:** Allocates a command queue on the device. Operations
+submitted to this stream will execute in FIFO order.
+
+**Example:** See `main.cpp:61 <../../examples/03-stream/main.cpp#L61>`_,
+`main.cpp:83 <../../examples/03-stream/main.cpp#L83>`_,
+`main.cpp:93 <../../examples/03-stream/main.cpp#L93>`_
+
+``aclrtSynchronizeStream``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: cpp
 
-   PlatformStream platform_stream_create(void);
+   aclError aclrtSynchronizeStream(aclrtStream stream);
 
-Create a new stream.
-
-**Returns:**
-
-- Stream handle on success
-- ``NULL`` on failure
-
-``platform_stream_destroy``
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. code-block:: cpp
-
-   void platform_stream_destroy(PlatformStream stream);
-
-Destroy a stream and free its resources.
-
-``platform_stream_sync``
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. code-block:: cpp
-
-   int platform_stream_sync(PlatformStream stream);
-
-Wait for all operations on the stream to complete.
+Block the host thread until all operations in the stream complete.
 
 **Parameters:**
 
-- ``stream``: Stream to synchronize (``NULL`` for default)
+- ``stream``: Stream to synchronize
 
 **Returns:**
 
-- ``PLATFORM_SUCCESS`` when all operations complete
-- ``PLATFORM_ERROR_STREAM`` on failure
+- ``ACL_SUCCESS`` when all operations complete
+- Error code on failure
+
+**Hardware behavior:** Host CPU waits until the device finishes all queued
+operations in this stream. Other streams are unaffected and continue executing.
+
+**Example:** See `main.cpp:164 <../../examples/03-stream/main.cpp#L164>`_,
+`main.cpp:167 <../../examples/03-stream/main.cpp#L167>`_,
+`main.cpp:170 <../../examples/03-stream/main.cpp#L170>`_
+
+``aclrtDestroyStream``
+^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: cpp
+
+   aclError aclrtDestroyStream(aclrtStream stream);
+
+Destroy a stream and free its resources.
+
+**Parameters:**
+
+- ``stream``: Stream to destroy
+
+**Returns:**
+
+- ``ACL_SUCCESS`` on success
+- Error code on failure
+
+**Hardware behavior:** Frees the command queue resources on the device. All
+operations in the stream must complete before destroying (use synchronize first).
+
+**Example:** See `main.cpp:178 <../../examples/03-stream/main.cpp#L178>`_
 
 Synchronization Patterns
 ------------------------
+
+.. note::
+
+   The examples below show conceptual patterns. The 03-stream example focuses
+   on stream lifecycle (creation, synchronization, destruction). Actual async
+   operations (``aclrtMemcpyAsync``, kernel launches) are demonstrated in
+   later examples.
 
 **Pattern 1: Simple Sequential**
 
 .. code-block:: cpp
 
-   // All operations on default stream, sequential
-   platform_memcpy_h2d(dev_input, host_input, size);
-   platform_kernel_launch(kernel, blocks, &args, sizeof(args), NULL);
-   platform_stream_sync(NULL);  // Wait for kernel
-   platform_memcpy_d2h(host_output, dev_output, size);
+   // All operations on one stream, execute sequentially
+   aclrtStream stream;
+   aclrtCreateStream(&stream);
+
+   aclrtMemcpyAsync(dev_input, host_input, size, ACL_MEMCPY_HOST_TO_DEVICE, stream);
+   // Launch kernel on stream (covered in example 04-kernel)
+   aclrtSynchronizeStream(stream);  // Wait for kernel to complete
+   aclrtMemcpyAsync(host_output, dev_output, size, ACL_MEMCPY_DEVICE_TO_HOST, stream);
+   aclrtSynchronizeStream(stream);  // Wait for D2H transfer
+
+   aclrtDestroyStream(stream);
 
 **Pattern 2: Overlapping Compute and Transfer**
 
 .. code-block:: cpp
 
-   PlatformStream compute_stream = platform_stream_create();
-   PlatformStream transfer_stream = platform_stream_create();
+   aclrtStream compute_stream;
+   aclrtStream transfer_stream;
+   aclrtCreateStream(&compute_stream);
+   aclrtCreateStream(&transfer_stream);
 
    // Overlap: compute on batch N while transferring batch N+1
    for (int batch = 0; batch < num_batches; batch++) {
        // Transfer next batch (if not last)
        if (batch + 1 < num_batches) {
-           platform_memcpy_h2d_async(dev_next, host_next, size, transfer_stream);
+           aclrtMemcpyAsync(dev_next, host_next, size,
+                           ACL_MEMCPY_HOST_TO_DEVICE, transfer_stream);
        }
 
-       // Compute current batch
-       platform_kernel_launch(kernel, blocks, &args, sizeof(args), compute_stream);
+       // Compute current batch (can overlap with transfer)
+       // Kernel launch would go here
 
-       // Sync before next iteration
-       platform_stream_sync(compute_stream);
-       platform_stream_sync(transfer_stream);
+       // Sync before next iteration to ensure operations complete
+       aclrtSynchronizeStream(compute_stream);
+       aclrtSynchronizeStream(transfer_stream);
 
        // Swap buffers
        swap(dev_current, dev_next);
    }
 
+   aclrtDestroyStream(compute_stream);
+   aclrtDestroyStream(transfer_stream);
+
 **Pattern 3: Multiple Independent Kernels**
 
 .. code-block:: cpp
 
-   // Launch independent kernels on separate streams
-   platform_kernel_launch(kernel_conv, 8, &conv_args, sizeof(conv_args), stream1);
-   platform_kernel_launch(kernel_bn, 4, &bn_args, sizeof(bn_args), stream2);
-   platform_kernel_launch(kernel_relu, 4, &relu_args, sizeof(relu_args), stream3);
+   aclrtStream stream1, stream2, stream3;
+   aclrtCreateStream(&stream1);
+   aclrtCreateStream(&stream2);
+   aclrtCreateStream(&stream3);
 
-   // Wait for all
-   platform_stream_sync(stream1);
-   platform_stream_sync(stream2);
-   platform_stream_sync(stream3);
+   // Launch independent kernels on separate streams (can execute in parallel)
+   // Kernel launches would go here on stream1, stream2, stream3
+
+   // Wait for all to complete
+   aclrtSynchronizeStream(stream1);
+   aclrtSynchronizeStream(stream2);
+   aclrtSynchronizeStream(stream3);
+
+   aclrtDestroyStream(stream1);
+   aclrtDestroyStream(stream2);
+   aclrtDestroyStream(stream3);
 
 When to Use Multiple Streams
 ----------------------------

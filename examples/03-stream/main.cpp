@@ -20,7 +20,12 @@
 int main() {
     printf("=== Ascend NPU Stream Operations ===\n\n");
 
-    /* Step 1: Initialize ACL and create context */
+    /* Step 1: Initialize ACL and create context
+     * Hardware context: Establishes connection to NPU device 0 and creates
+     * an execution context. The context manages resources (memory, streams)
+     * for this process on the device. All streams created later belong to
+     * this context and share its resource pool.
+     */
     printf("Step 1: Initialize ACL runtime...\n");
     aclError ret = aclInit(nullptr);
     if (ret != ACL_SUCCESS) {
@@ -45,7 +50,12 @@ int main() {
     }
     printf("  ACL initialized\n\n");
 
-    /* Step 2: Create default stream */
+    /* Step 2: Create default stream
+     * Hardware behavior: A stream is a command queue to the device. Operations
+     * (memcpy, kernel launches) submitted to this queue execute in FIFO order
+     * on the NPU. The stream is per-context, not global - different contexts
+     * have independent streams even if named "default".
+     */
     printf("Step 2: Create default stream...\n");
     aclrtStream default_stream = nullptr;
     ret = aclrtCreateStream(&default_stream);
@@ -59,7 +69,13 @@ int main() {
     printf("  Default stream: %p\n", default_stream);
     printf("\n");
 
-    /* Step 3: Create custom streams */
+    /* Step 3: Create custom streams
+     * Hardware parallelism: Multiple streams enable concurrent execution on
+     * different AICORE blocks. Operations in stream1 and stream2 can execute
+     * simultaneously if hardware resources permit. Each stream maintains its
+     * own FIFO queue - operations within a stream are sequential, but streams
+     * themselves are independent and can overlap.
+     */
     printf("Step 3: Create custom streams...\n");
     aclrtStream stream1 = nullptr;
     aclrtStream stream2 = nullptr;
@@ -98,7 +114,13 @@ int main() {
     printf("    4. Synchronize stream with aclrtSynchronizeStream()\n");
     printf("\n");
 
-    /* Step 5: Allocate memory to demonstrate stream usage */
+    /* Step 5: Allocate device memory
+     * Purpose: Prepare HBM (High Bandwidth Memory) buffers on the device.
+     * In a real workflow, async operations (aclrtMemcpyAsync, kernel launches)
+     * would use these buffers with streams. This allocation happens on the
+     * host CPU but reserves physical HBM on the NPU card (ACL_MEM_MALLOC_HUGE_FIRST
+     * prefers huge pages for better DMA transfer efficiency).
+     */
     printf("Step 5: Allocate device memory...\n");
     void* dev_buf1 = nullptr;
     void* dev_buf2 = nullptr;
@@ -131,7 +153,13 @@ int main() {
     printf("  Allocated 2 buffers on device\n");
     printf("  (Async memcpy would use aclrtMemcpyAsync with streams)\n\n");
 
-    /* Step 6: Synchronize streams */
+    /* Step 6: Synchronize streams
+     * Hardware synchronization: Blocks the host CPU until all operations
+     * queued in the stream complete on the device. Since we haven't actually
+     * queued any operations, these sync calls return immediately. In real usage,
+     * sync ensures all async memcpy/kernel operations finish before the host
+     * reads results from device memory.
+     */
     printf("Step 6: Synchronize streams...\n");
     ret = aclrtSynchronizeStream(stream1);
     printf("  Stream 1 sync: %s\n", ret == ACL_SUCCESS ? "OK" : "FAILED");

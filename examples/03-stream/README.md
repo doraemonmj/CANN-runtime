@@ -17,9 +17,9 @@ This pattern is essential for:
 - [`main.cpp`](main.cpp) - Host-side code demonstrating stream creation, usage, and synchronization
 
 ## Key CANN APIs
-- `aclrtCreateStream()` - Creates a new stream for async operations (see [main.cpp:51](main.cpp#L51), [main.cpp:67](main.cpp#L67), [main.cpp:77](main.cpp#L77))
-- `aclrtSynchronizeStream()` - Blocks until all operations in the stream complete (see [main.cpp:136](main.cpp#L136), [main.cpp:139](main.cpp#L139), [main.cpp:142](main.cpp#L142))
-- `aclrtDestroyStream()` - Destroys a stream and releases its resources (see [main.cpp:150](main.cpp#L150))
+- `aclrtCreateStream()` - Creates a new stream for async operations (see [main.cpp:61](main.cpp#L61), [main.cpp:83](main.cpp#L83), [main.cpp:93](main.cpp#L93))
+- `aclrtSynchronizeStream()` - Blocks until all operations in the stream complete (see [main.cpp:164](main.cpp#L164), [main.cpp:167](main.cpp#L167), [main.cpp:170](main.cpp#L170))
+- `aclrtDestroyStream()` - Destroys a stream and releases its resources (see [main.cpp:178](main.cpp#L178))
 
 Streams are used with async variants of other APIs:
 - `aclrtMemcpyAsync()` - Asynchronous H2D/D2H copy on a stream
