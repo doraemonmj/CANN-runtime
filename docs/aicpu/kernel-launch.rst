@@ -1,223 +1,322 @@
 AICPU Kernel Launch
 ===================
 
-This page covers how to load and launch AICPU kernels from host code.
+This page covers how to load and launch AICPU kernels from host code using CANN Runtime API.
 
-.. seealso::
+.. note::
 
-   See the :doc:`../aicore/calling-interface` page for detailed argument struct layout and
-   alignment rules that apply to both AICORE and AICPU kernels.
+   See example ``examples/04-aicpu-basic/`` for a complete working implementation
+   using Runtime API ``rtAicpuKernelLaunchExWithArgs()`` with the backend server pattern.
 
-Kernel Format
--------------
+Backend Server Pattern
+----------------------
 
-AICPU kernels are compiled as Linux shared libraries (``.so`` files):
+AICPU kernel execution requires the **backend server pattern** - a multi-layer structure:
 
-.. code-block:: text
+1. **System Kernel**: ``libaicpu_extend_kernels.so`` (CANN-provided)
+2. **Backend Server**: Your compiled ``.so`` (e.g., ``libtilefwk_backend_server.so``)
+3. **Entry Points**: Specific function names expected by system kernel
 
-   my_kernel.cpp  →  aarch64-linux-gnu-g++  →  my_kernel.so
+The system kernel acts as an intermediary, loading your backend server and calling entry points by name.
 
-Requirements:
+**Required Entry Points:**
 
-- Compiled for AArch64 (ARM 64-bit)
-- Entry function with ``extern "C"`` linkage
-- Position-independent code (``-fPIC``)
+.. code-block:: cpp
+
+   extern "C" {
+
+   // Called during init phase
+   int DynTileFwkBackendKernelServerInit(void *arg);
+
+   // Called during execution phase
+   int DynTileFwkBackendKernelServer(void *arg);
+
+   // Optional static variant
+   int StaticTileFwkBackendKernelServer(void *arg);
+
+   }
+
+**Required Library Name:**
+
+Your backend server must be named ``libtilefwk_backend_server.so`` for the system kernel to find it.
 
 Writing an AICPU Kernel
 -----------------------
 
-.. code-block:: cpp
+Example kernel (see `examples/04-aicpu-basic/kernel/scale_kernel.cpp <../../examples/04-aicpu-basic/kernel/scale_kernel.cpp>`_):
 
-   // example_kernel.cpp
+.. code-block:: cpp
 
    #include <cstdint>
 
    extern "C" {
 
-   // Argument structure - must match host definition
+   // Your kernel arguments (must match host side exactly)
    struct ScaleArgs {
-       void* input;      // Device pointer to input
-       void* output;     // Device pointer to output
-       int32_t count;    // Number of elements
-       float scale;      // Scale factor
+       void* input;      // HBM pointer
+       void* output;     // HBM pointer
+       int32_t count;
+       float scale;
    };
 
-   // Entry function - name used in launch call
-   void scale_kernel(ScaleArgs* args) {
+   // DeviceArgs for custom argument passing
+   struct DeviceArgs {
+       uint64_t unused[12];
+       uint64_t aicpuSoBin;
+       uint64_t aicpuSoLen;
+       uint64_t customArgsPtr;  // Pointer to ScaleArgs
+   };
+
+   static ScaleArgs* g_scaleArgs = nullptr;
+
+   __attribute__((visibility("default")))
+   int DynTileFwkBackendKernelServerInit(void *arg) {
+       if (arg == nullptr) return -1;
+
+       // Extract DeviceArgs from system kernel's internal structure
+       DeviceArgs* devArgs = reinterpret_cast<DeviceArgs*>(
+           *reinterpret_cast<uint64_t**>(reinterpret_cast<char*>(arg) + 40));
+
+       if (devArgs != nullptr && devArgs->customArgsPtr != 0) {
+           g_scaleArgs = reinterpret_cast<ScaleArgs*>(devArgs->customArgsPtr);
+       }
+       return 0;
+   }
+
+   __attribute__((visibility("default")))
+   int DynTileFwkBackendKernelServer(void *arg) {
+       if (arg == nullptr || g_scaleArgs == nullptr) return -1;
+
+       ScaleArgs* args = g_scaleArgs;
        float* in = reinterpret_cast<float*>(args->input);
        float* out = reinterpret_cast<float*>(args->output);
 
+       // Full C++ support - can use loops, STL, libm, etc.
        for (int32_t i = 0; i < args->count; i++) {
            out[i] = in[i] * args->scale;
        }
+       return 0;
    }
 
-   }  // extern "C"
+   __attribute__((visibility("default")))
+   int StaticTileFwkBackendKernelServer(void *arg) {
+       return 0;  // Not used in this example
+   }
+
+   }
 
 Compiling
 ---------
 
+CMake configuration (see `examples/04-aicpu-basic/kernel/CMakeLists.txt <../../examples/04-aicpu-basic/kernel/CMakeLists.txt>`_):
+
+.. code-block:: cmake
+
+   cmake_minimum_required(VERSION 3.10)
+   project(tilefwk_backend_server LANGUAGES CXX)
+
+   set(CMAKE_CXX_STANDARD 17)
+   add_library(tilefwk_backend_server SHARED scale_kernel.cpp)
+
+   target_compile_options(tilefwk_backend_server PRIVATE
+       -fPIC           # Position independent code
+       -O2             # Optimization
+       -fno-exceptions # Optional: smaller code
+   )
+
+   set_target_properties(tilefwk_backend_server PROPERTIES
+       OUTPUT_NAME "tilefwk_backend_server"
+       PREFIX "lib"
+       SUFFIX ".so"
+   )
+
+Build:
+
 .. code-block:: bash
 
-   # Cross-compile for AArch64 (from x86 host)
-   aarch64-linux-gnu-g++ -shared -fPIC -O2 -o scale_kernel.so example_kernel.cpp
-
-   # Or native compile on AArch64 (on Ascend device)
-   g++ -shared -fPIC -O2 -o scale_kernel.so example_kernel.cpp
+   # Native compile on Ascend device
+   mkdir build && cd build
+   cmake ..
+   make  # Produces libtilefwk_backend_server.so
 
 Launch API
 ----------
 
+Host-side launch requires several steps:
+
+1. Load ``.so`` binary to device HBM
+2. Allocate and prepare argument structures in HBM
+3. Launch init kernel (``DynTileFwkKernelServerInit``)
+4. Launch main kernel (``DynTileFwkKernelServer``)
+
+**Key Runtime APIs:**
+
 .. code-block:: cpp
 
-   int platform_aicpu_launch(
-       const void* so_data,     // .so file contents in memory
-       size_t so_size,          // Size of .so file
-       const char* entry,       // Entry function name
-       void* args,              // Pointer to argument struct
-       size_t args_size,        // sizeof(argument struct)
-       PlatformStream stream    // Stream (NULL for default)
+   // Load .so to HBM
+   void* dev_so = nullptr;
+   rtMalloc(&dev_so, so_size, RT_MEMORY_HBM, 0);
+   rtMemcpy(dev_so, so_size, so_data, so_size, RT_MEMCPY_HOST_TO_DEVICE);
+
+   // Launch kernel
+   int rtAicpuKernelLaunchExWithArgs(
+       rtKernelType_t kernel_type,    // KERNEL_TYPE_AICPU_KFC
+       const char* stub_func,         // "AST_DYN_AICPU"
+       uint32_t aicpu_num,            // Number of AICPU cores (usually 1)
+       rtAicpuArgsEx_t* args,         // Extended args structure
+       void* sm_desc,                 // nullptr
+       rtStream_t stream,             // Stream handle
+       uint32_t flags                 // 0
    );
 
 Complete Example
 ----------------
 
-.. code-block:: cpp
+See `examples/04-aicpu-basic/main.cpp <../../examples/04-aicpu-basic/main.cpp>`_ for full implementation.
 
-   #include <cstdio>
-   #include <cstdlib>
-   #include "platform.h"
+Key steps:
 
-   // Must match kernel definition exactly
-   struct ScaleArgs {
-       void* input;
-       void* output;
-       int32_t count;
-       float scale;
-   };
+1. **Initialize** (`main.cpp:199 <../../examples/04-aicpu-basic/main.cpp#L199>`_):
 
-   // Helper to read file into memory
-   void* read_file(const char* path, size_t* size) {
-       FILE* f = fopen(path, "rb");
-       if (!f) return nullptr;
+   .. code-block:: cpp
 
-       fseek(f, 0, SEEK_END);
-       *size = ftell(f);
-       fseek(f, 0, SEEK_SET);
+      rtSetDevice(0);
+      rtStream_t stream;
+      rtStreamCreate(&stream, 0);
 
-       void* data = malloc(*size);
-       fread(data, 1, *size, f);
-       fclose(f);
-       return data;
-   }
+2. **Allocate memory** (`main.cpp:232 <../../examples/04-aicpu-basic/main.cpp#L232>`_):
 
-   int main() {
-       platform_init(0);
+   .. code-block:: cpp
 
-       // Prepare data
-       const int N = 1024;
-       float* host_in = (float*)malloc(N * sizeof(float));
-       float* host_out = (float*)malloc(N * sizeof(float));
-       for (int i = 0; i < N; i++) host_in[i] = (float)i;
+      void* dev_input = nullptr;
+      rtMalloc(&dev_input, size, RT_MEMORY_HBM, 0);
+      rtMemcpy(dev_input, size, host_input, size, RT_MEMCPY_HOST_TO_DEVICE);
 
-       // Allocate device memory
-       void* dev_in = platform_malloc(N * sizeof(float));
-       void* dev_out = platform_malloc(N * sizeof(float));
+3. **Load .so** (`main.cpp:107 <../../examples/04-aicpu-basic/main.cpp#L107>`_):
 
-       // Copy input to device
-       platform_memcpy_h2d(dev_in, host_in, N * sizeof(float));
+   .. code-block:: cpp
 
-       // Load kernel .so
-       size_t so_size;
-       void* so_data = read_file("scale_kernel.so", &so_size);
+      void* dev_so = nullptr;
+      rtMalloc(&dev_so, so_size, RT_MEMORY_HBM, 0);
+      rtMemcpy(dev_so, so_size, so_data, so_size, RT_MEMCPY_HOST_TO_DEVICE);
 
-       // Pack arguments
-       ScaleArgs args;
-       args.input = dev_in;
-       args.output = dev_out;
-       args.count = N;
-       args.scale = 2.5f;
+4. **Prepare arguments** (`main.cpp:290 <../../examples/04-aicpu-basic/main.cpp#L290>`_):
 
-       // Launch kernel
-       int ret = platform_aicpu_launch(
-           so_data, so_size,
-           "scale_kernel",         // Entry function name
-           &args, sizeof(args),
-           NULL                    // Default stream
-       );
+   .. code-block:: cpp
 
-       if (ret != PLATFORM_SUCCESS) {
-           printf("Kernel launch failed\n");
-           return 1;
-       }
+      // Allocate ScaleArgs in HBM
+      ScaleArgs* dev_args = nullptr;
+      rtMalloc(&dev_args, sizeof(ScaleArgs), RT_MEMORY_HBM, 0);
 
-       // Sync and get results
-       platform_stream_sync(NULL);
-       platform_memcpy_d2h(host_out, dev_out, N * sizeof(float));
+      ScaleArgs args = {dev_input, dev_output, count, scale};
+      rtMemcpy(dev_args, sizeof(args), &args, sizeof(args), RT_MEMCPY_HOST_TO_DEVICE);
 
-       // Verify
-       printf("Input[0]: %.1f, Output[0]: %.1f (expected %.1f)\n",
-              host_in[0], host_out[0], host_in[0] * 2.5f);
+      // Configure DeviceArgs
+      DeviceArgs device_args;
+      device_args.aicpuSoBin = (uint64_t)dev_so;
+      device_args.aicpuSoLen = so_size;
+      device_args.customArgsPtr = (uint64_t)dev_args;
 
-       // Cleanup
-       free(so_data);
-       platform_free(dev_in);
-       platform_free(dev_out);
-       free(host_in);
-       free(host_out);
-       platform_shutdown();
+5. **Launch kernels** (`main.cpp:353 <../../examples/04-aicpu-basic/main.cpp#L353>`_):
 
-       return 0;
-   }
+   .. code-block:: cpp
 
-Argument Struct Rules
----------------------
+      // Init kernel
+      LaunchAiCpuKernel(stream, &kernel_args, "DynTileFwkKernelServerInit", 1);
 
-1. **Match exactly**: Host and kernel struct must be identical
-2. **Use fixed-size types**: ``int32_t`` not ``int``, etc.
-3. **Align to 8 bytes**: Add padding if needed
-4. **Pointers are device pointers**: From ``platform_malloc``
+      // Main kernel
+      LaunchAiCpuKernel(stream, &kernel_args, "DynTileFwkKernelServer", 1);
+
+6. **Synchronize** (`main.cpp:390 <../../examples/04-aicpu-basic/main.cpp#L390>`_):
+
+   .. code-block:: cpp
+
+      rtStreamSynchronize(stream);
+      rtMemcpy(host_output, size, dev_output, size, RT_MEMCPY_DEVICE_TO_HOST);
+
+Argument Passing
+----------------
+
+The backend server pattern requires custom argument workaround:
+
+**Problem**: System kernel doesn't directly pass custom arguments to backend server.
+
+**Solution**: Use ``DeviceArgs.customArgsPtr`` indirection:
+
+1. Host allocates custom args (``ScaleArgs``) in HBM
+2. Host sets ``DeviceArgs.customArgsPtr`` to point to custom args
+3. Init kernel extracts ``customArgsPtr`` from system kernel's internal structure
+4. Main kernel uses saved pointer to access custom args
+
+**DeviceArgs Layout:**
 
 .. code-block:: cpp
 
-   // CORRECT - well-defined sizes and alignment
-   struct GoodArgs {
-       void* ptr1;        // 8 bytes, offset 0
-       void* ptr2;        // 8 bytes, offset 8
-       int32_t count;     // 4 bytes, offset 16
-       float value;       // 4 bytes, offset 20
-   };  // Total: 24 bytes, 8-byte aligned ✓
-
-   // WRONG - architecture-dependent sizes
-   struct BadArgs {
-       void* ptr;
-       int count;         // 4 or 8 bytes depending on arch!
-       long value;        // 4 or 8 bytes depending on arch!
+   struct DeviceArgs {
+       uint64_t unused[12];       // Padding for system kernel
+       uint64_t aicpuSoBin;       // HBM address of .so
+       uint64_t aicpuSoLen;       // Size of .so
+       uint64_t customArgsPtr;    // Our custom args pointer
    };
+
+**Extract in Init Kernel:**
+
+.. code-block:: cpp
+
+   DeviceArgs* devArgs = reinterpret_cast<DeviceArgs*>(
+       *reinterpret_cast<uint64_t**>(reinterpret_cast<char*>(arg) + 40));
+
+The offset (+40 bytes) is where the system kernel stores the ``DeviceArgs`` pointer in its internal structure.
+
+AICPU Capabilities
+------------------
+
+AICPU runs on ARM Cortex-A55 cores with full C++ support:
+
+✅ **Supported:**
+
+- Full C/C++ standard library (libc/libstdc++)
+- STL containers, algorithms, iterators
+- Exceptions, RTTI
+- Math library (libm) - sin, cos, sqrt, etc.
+- Dynamic memory allocation (malloc/new)
+- Floating-point operations
+- Standard control flow (loops, conditionals, function calls)
+
+❌ **Not Available:**
+
+- Specialized compute units (no Cube/Vector like AICore)
+- Ascend C tensor operators (those are AICore-only)
+- Direct L1 buffer management (AICPU uses standard caches)
+
+**When to use AICPU:**
+
+- Dynamic shapes (size unknown at compile time)
+- Complex control flow (data-dependent branches)
+- Sparse or irregular memory access
+- Standard algorithms (sorting, hashing, etc.)
+- Operations not well-suited for SIMD/matrix units
 
 Error Handling
 --------------
 
+Always check return codes:
+
 .. code-block:: cpp
 
-   int ret = platform_aicpu_launch(...);
+   int rc = rtAicpuKernelLaunchExWithArgs(...);
+   if (rc != 0) {
+       std::cerr << "Kernel launch failed: " << rc << '\n';
+       return rc;
+   }
 
-   switch (ret) {
-       case PLATFORM_SUCCESS:
-           // Kernel submitted successfully
-           break;
-       case PLATFORM_ERROR_INIT:
-           // Platform not initialized
-           break;
-       case PLATFORM_ERROR_KERNEL:
-           // Invalid kernel or entry point
-           break;
-       default:
-           // Other error
-           break;
+   // Kernel errors may not surface until sync
+   rc = rtStreamSynchronize(stream);
+   if (rc != 0) {
+       std::cerr << "Kernel execution failed: " << rc << '\n';
    }
 
 .. warning::
 
-   Kernel errors may not be detected until ``platform_stream_sync()``.
-   Always check sync return value.
+   Kernel runtime errors may not be detected until ``rtStreamSynchronize()``.
+   Always check both launch and sync return values.

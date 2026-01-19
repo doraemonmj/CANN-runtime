@@ -1,28 +1,45 @@
-# 06-aicpu-basic example
+# 04-aicpu-basic - AICPU Kernel Example
+#
+# Demonstrates AICPU kernel loading and execution using Runtime API
 #
 # Standalone build:
 #   mkdir build && cd build && cmake .. && make
-#
-# Or build from root project
 
-cmake_minimum_required(VERSION 3.10)
-project(06-aicpu-basic LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.15)
+project(04-aicpu-basic LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Build platform library if not already available
-if(NOT TARGET ascend_platform)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../platform
-                     ${CMAKE_CURRENT_BINARY_DIR}/platform_build)
+add_compile_options(-Wall -Wextra -Wpedantic)
+
+# Ascend CANN runtime path
+if(DEFINED ENV{ASCEND_HOME_PATH})
+    set(ASCEND_HOME_PATH $ENV{ASCEND_HOME_PATH})
+else()
+    message(FATAL_ERROR "ASCEND_HOME_PATH not set. CANN runtime required.")
 endif()
 
-add_executable(06-aicpu-basic main.cpp)
-target_link_libraries(06-aicpu-basic PRIVATE ascend_platform)
+# Build host executable
+add_executable(04-aicpu-basic main.cpp)
 
-if(BUILD_WITH_CANN)
-    target_link_options(06-aicpu-basic PRIVATE -Wl,--allow-shlib-undefined)
-endif()
+# Include Runtime API headers
+target_include_directories(04-aicpu-basic PRIVATE
+    ${ASCEND_HOME_PATH}/include
+    ${ASCEND_HOME_PATH}/include/experiment
+    ${ASCEND_HOME_PATH}/include/experiment/runtime
+    ${ASCEND_HOME_PATH}/include/experiment/msprof
+)
 
-# AICPU kernel is a separate .so - built with aarch64 cross-compiler
-# See kernel/ subdirectory for kernel source
+# Link Runtime library
+target_link_directories(04-aicpu-basic PRIVATE
+    ${ASCEND_HOME_PATH}/lib64
+    ${ASCEND_HOME_PATH}/runtime/lib64
+)
+
+target_link_libraries(04-aicpu-basic PRIVATE
+    runtime
+)
+
+# Build AICPU kernel .so in subdirectory
+add_subdirectory(kernel)
