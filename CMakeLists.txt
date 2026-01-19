@@ -25,12 +25,11 @@ option(BUILD_EXAMPLES "Build all examples" ON)
 
 # Build converted examples (01-05)
 if(BUILD_EXAMPLES)
-    message(STATUS "Building converted examples (01-05)")
+    message(STATUS "Building converted examples (01-04)")
     add_subdirectory(examples/01-device-query)
     add_subdirectory(examples/02-memory)
     add_subdirectory(examples/03-stream)
-    add_subdirectory(examples/04-kernel)
-    add_subdirectory(examples/05-calling-interface)
+    add_subdirectory(examples/04-aicpu-kernel-launch)
 
     # Note: Examples 06-20 still use platform layer (not yet converted)
     # Uncomment after conversion:

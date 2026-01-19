@@ -63,8 +63,8 @@ Examples progress from simple to complex, each building on previous concepts.
 | [02-memory](examples/02-memory/) | HBM allocation, H2D/D2H transfers | [docs](docs/getting-started/memory.rst) | ✅ |
 | [03-stream](examples/03-stream/) | Asynchronous execution streams | [docs](docs/getting-started/streams.rst) | ✅ |
 | **AICPU Programming** | | | |
-| [04-aicpu-basic](examples/04-aicpu-basic/) | AICPU kernel execution with Runtime API (.so loading) | [docs](docs/aicpu/kernel-launch.rst) | ✅ |
-| [05-aicpu-scale](examples/05-aicpu-scale/) | Complete AICPU launch workflow | [docs](docs/aicpu/kernel-launch.rst) | 🟢 |
+| [04-aicpu-kernel-launch](examples/04-aicpu-kernel-launch/) | AICPU kernel execution with Runtime API (backend server pattern) | [docs](docs/aicpu/kernel-launch.rst) | ✅ |
+| [05-aicpu-multithread](examples/05-aicpu-multithread/) | Multi-core eval model (4 AICPU cores max) - educational only | [docs](docs/aicpu/kernel-launch.rst#multi-core-parallel-execution) | ✅ |
 | [06-aicpu-logging](examples/06-aicpu-logging/) | Debug output and error handling | [docs](docs/aicpu/logging.rst) | 🟢 |
 | [07-aicpu-atomic](examples/07-aicpu-atomic/) | Multi-core synchronization with atomics | [docs](docs/aicpu/atomic.rst) | 🟢 |
 | [08-aicpu-queue](examples/08-aicpu-queue/) | Lock-free queues (SPSC/MPMC) | [docs](docs/aicpu/queue.rst) | 🟢 |
@@ -85,7 +85,7 @@ Examples progress from simple to complex, each building on previous concepts.
 - **Code**: 18 examples implemented ✅ (01-18, continuous numbering)
 - **ReadTheDocs**: 20/20 pages complete ✅ (docs remain complete)
 - **Example READMEs**: 4 complete (01-04) 🚧
-- **Direct ACL APIs**: 4 converted (01-04) 🚧
+- **Direct ACL APIs**: 5 converted (01-05) 🚧
 
 ## Philosophy
 

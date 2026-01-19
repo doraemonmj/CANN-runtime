@@ -1,17 +1,31 @@
 /**
- * 04-aicpu-basic - AICPU Kernel Execution
+ * 05-aicpu-multithread - AICPU Multi-core Parallel Execution
+ *
+ * EDUCATIONAL EXAMPLE: Demonstrates eval model threading architecture.
+ *
+ * IMPORTANT: In production, AICPU is for control/coordination, not compute.
+ * - AICPU: Controls AICore, handles dynamic shapes, complex control flow
+ * - AICore: Performs actual computation (matrix ops, SIMD operations)
+ * - Maximum 4 AICPUs available on Ascend 910
+ *
+ * This example uses AICPU for simple compute to teach eval model concepts:
+ * - How runtime directs multiple CPU cores to execute same entry point
+ * - Thread ID assignment via allocThreadIdx() hardware mechanism
+ * - Work partitioning strategies for multi-core execution
+ *
+ * For production compute workloads, use AICore (see examples 09-18).
  *
  * This example demonstrates:
- * - Loading .so binaries to device HBM
- * - AICPU backend server pattern (two-phase launch)
- * - Custom argument passing to AICPU kernels
- * - Coordination between host CPU and AICPU cores
+ * - Launching AICPU kernels across 4 cores (hardware maximum)
+ * - Eval model execution (not pthread spawning)
+ * - Work partitioning among threads
+ * - Thread ID management via allocThreadIdx()
  *
  * Hardware concepts taught:
- * - AICPU: ARM Cortex-A55 cores with full C++ support
- * - Backend server pattern: System kernel intermediary layer
- * - HBM access: AICPU directly accesses same memory as AICore
- * - Kernel dispatch: Init phase + execution phase
+ * - AICPU multi-core architecture (4 ARM Cortex-A55 cores used)
+ * - Eval model vs pthread model
+ * - allocThreadIdx() hardware thread indexing
+ * - Work partitioning strategies for data parallelism
  */
 
 #include <cstddef>
@@ -33,7 +47,7 @@ struct DeviceArgs {
     uint64_t unused[12] = {0};     // Hardware requirement: padding for system kernel
     uint64_t aicpuSoBin{0};        // HBM pointer to .so binary
     uint64_t aicpuSoLen{0};        // Size in bytes
-    uint64_t customArgsPtr{0};     // HBM pointer to ScaleArgs (our workaround)
+    uint64_t customArgsPtr{0};     // HBM pointer to ParallelAddArgs (our workaround)
 };
 
 /**
@@ -85,14 +99,15 @@ struct KernelArgs {
 
 /**
  * Kernel-specific arguments
- * Hardware pointers: input/output must be HBM addresses accessible by AICPU.
- * This structure lives in HBM and is accessed directly by AICPU cores.
+ * Hardware pointers: input/output must be HBM addresses accessible by all AICPU cores.
+ * This structure lives in HBM and is accessed directly by all cores in parallel.
  */
-struct ScaleArgs {
-    void* input;       // HBM pointer (from rtMalloc)
-    void* output;      // HBM pointer (from rtMalloc)
-    int32_t count;     // Element count
-    float scale;       // Scale factor
+struct ParallelAddArgs {
+    void* input_a;      // HBM pointer (from rtMalloc)
+    void* input_b;      // HBM pointer (from rtMalloc)
+    void* output;       // HBM pointer (from rtMalloc)
+    int32_t count;      // Total element count
+    int32_t num_threads; // Number of AICPU cores to use (8)
 };
 
 /**
@@ -190,7 +205,9 @@ int LaunchAiCpuKernel(rtStream_t stream, KernelArgs *kArgs,
 }
 
 int main() {
-    std::cout << "=== AICPU Kernel Example ===\n\n";
+    std::cout << "=== AICPU Multi-threaded Kernel Example ===\n";
+    std::cout << "Using 4 AICPU cores in parallel (hardware maximum)\n";
+    std::cout << "EDUCATIONAL: Production uses AICore for compute\n\n";
 
     /* Step 1: Set device
      * Hardware initialization: Select NPU device 0 and establish host→device
@@ -214,25 +231,41 @@ int main() {
     }
 
     /* Step 3: Prepare host data
-     * Host DRAM: Initialize input array on CPU side before transfer */
+     * Host DRAM: Initialize input arrays on CPU side before transfer */
     const int N = 1024;
-    float* host_input = new float[N];
+    float* host_input_a = new float[N];
+    float* host_input_b = new float[N];
     float* host_output = new float[N];
 
     for (int i = 0; i < N; i++) {
-        host_input[i] = static_cast<float>(i);
+        host_input_a[i] = static_cast<float>(i);
+        host_input_b[i] = static_cast<float>(i) * 0.5f;
     }
 
     /* Step 4: Allocate device memory
-     * Hardware allocation: Reserve HBM (High Bandwidth Memory) for input/output.
+     * Hardware allocation: Reserve HBM (High Bandwidth Memory) for inputs/output.
      * AICPU cores access this directly - no separate AICPU memory space. */
-    void* dev_input = nullptr;
+    void* dev_input_a = nullptr;
+    void* dev_input_b = nullptr;
     void* dev_output = nullptr;
 
-    rc = rtMalloc(&dev_input, N * sizeof(float), RT_MEMORY_HBM, 0);
+    rc = rtMalloc(&dev_input_a, N * sizeof(float), RT_MEMORY_HBM, 0);
     if (rc != 0) {
-        std::cerr << "rtMalloc input failed: " << rc << '\n';
-        delete[] host_input;
+        std::cerr << "rtMalloc input_a failed: " << rc << '\n';
+        delete[] host_input_a;
+        delete[] host_input_b;
+        delete[] host_output;
+        rtStreamDestroy(stream);
+        rtDeviceReset(0);
+        return rc;
+    }
+
+    rc = rtMalloc(&dev_input_b, N * sizeof(float), RT_MEMORY_HBM, 0);
+    if (rc != 0) {
+        std::cerr << "rtMalloc input_b failed: " << rc << '\n';
+        rtFree(dev_input_a);
+        delete[] host_input_a;
+        delete[] host_input_b;
         delete[] host_output;
         rtStreamDestroy(stream);
         rtDeviceReset(0);
@@ -242,24 +275,43 @@ int main() {
     rc = rtMalloc(&dev_output, N * sizeof(float), RT_MEMORY_HBM, 0);
     if (rc != 0) {
         std::cerr << "rtMalloc output failed: " << rc << '\n';
-        rtFree(dev_input);
-        delete[] host_input;
+        rtFree(dev_input_b);
+        rtFree(dev_input_a);
+        delete[] host_input_a;
+        delete[] host_input_b;
         delete[] host_output;
         rtStreamDestroy(stream);
         rtDeviceReset(0);
         return rc;
     }
 
-    /* Step 5: Copy input to device
+    /* Step 5: Copy inputs to device
      * Hardware transfer: DMA transfer from host DRAM to device HBM via PCIe.
      * Synchronous operation - host waits for completion. */
-    rc = rtMemcpy(dev_input, N * sizeof(float), host_input, N * sizeof(float),
+    rc = rtMemcpy(dev_input_a, N * sizeof(float), host_input_a, N * sizeof(float),
                   RT_MEMCPY_HOST_TO_DEVICE);
     if (rc != 0) {
-        std::cerr << "rtMemcpy H2D failed: " << rc << '\n';
+        std::cerr << "rtMemcpy H2D (input_a) failed: " << rc << '\n';
         rtFree(dev_output);
-        rtFree(dev_input);
-        delete[] host_input;
+        rtFree(dev_input_b);
+        rtFree(dev_input_a);
+        delete[] host_input_a;
+        delete[] host_input_b;
+        delete[] host_output;
+        rtStreamDestroy(stream);
+        rtDeviceReset(0);
+        return rc;
+    }
+
+    rc = rtMemcpy(dev_input_b, N * sizeof(float), host_input_b, N * sizeof(float),
+                  RT_MEMCPY_HOST_TO_DEVICE);
+    if (rc != 0) {
+        std::cerr << "rtMemcpy H2D (input_b) failed: " << rc << '\n';
+        rtFree(dev_output);
+        rtFree(dev_input_b);
+        rtFree(dev_input_a);
+        delete[] host_input_a;
+        delete[] host_input_b;
         delete[] host_output;
         rtStreamDestroy(stream);
         rtDeviceReset(0);
@@ -270,13 +322,15 @@ int main() {
      * Hardware loading: Transfer compiled ARM64 AICPU kernel to HBM.
      * AICPU cores will load this as a shared library during kernel init. */
     AicpuSoInfo soInfo{};
-    rc = soInfo.Init("./kernel/libscale_aicpu_kernel.so");
+    rc = soInfo.Init("./kernel/libparallel_add_aicpu_kernel.so");
     if (rc != 0) {
         std::cerr << "Failed to load kernel .so\n";
         std::cerr << "Build kernel first: cd kernel && mkdir build && cd build && cmake .. && make\n";
         rtFree(dev_output);
-        rtFree(dev_input);
-        delete[] host_input;
+        rtFree(dev_input_b);
+        rtFree(dev_input_a);
+        delete[] host_input_a;
+        delete[] host_input_b;
         delete[] host_output;
         rtStreamDestroy(stream);
         rtDeviceReset(0);
@@ -284,39 +338,44 @@ int main() {
     }
 
     /* Step 7: Allocate and prepare kernel arguments
-     * Hardware argument passing: Our ScaleArgs must live in HBM for AICPU
+     * Hardware argument passing: Our ParallelAddArgs must live in HBM for AICPU
      * to access. We pass pointer to it through DeviceArgs.customArgsPtr. */
-    ScaleArgs* dev_scale_args = nullptr;
-    rc = rtMalloc(reinterpret_cast<void**>(&dev_scale_args), sizeof(ScaleArgs),
+    ParallelAddArgs* dev_parallel_args = nullptr;
+    rc = rtMalloc(reinterpret_cast<void**>(&dev_parallel_args), sizeof(ParallelAddArgs),
                   RT_MEMORY_HBM, 0);
     if (rc != 0) {
-        std::cerr << "rtMalloc for ScaleArgs failed: " << rc << '\n';
+        std::cerr << "rtMalloc for ParallelAddArgs failed: " << rc << '\n';
         soInfo.Finalize();
         rtFree(dev_output);
-        rtFree(dev_input);
-        delete[] host_input;
+        rtFree(dev_input_a);
+        rtFree(dev_input_b);
+        delete[] host_input_a;
+        delete[] host_input_b;
         delete[] host_output;
         rtStreamDestroy(stream);
         rtDeviceReset(0);
         return rc;
     }
 
-    ScaleArgs scale_args;
-    scale_args.input = dev_input;
-    scale_args.output = dev_output;
-    scale_args.count = N;
-    scale_args.scale = 2.5f;
+    ParallelAddArgs parallel_args;
+    parallel_args.input_a = dev_input_a;
+    parallel_args.input_b = dev_input_b;
+    parallel_args.output = dev_output;
+    parallel_args.count = N;
+    parallel_args.num_threads = 4;  // Use 4 AICPU cores (hardware maximum)
 
-    /* Hardware transfer: Copy ScaleArgs to HBM */
-    rc = rtMemcpy(dev_scale_args, sizeof(ScaleArgs), &scale_args,
-                  sizeof(ScaleArgs), RT_MEMCPY_HOST_TO_DEVICE);
+    /* Hardware transfer: Copy ParallelAddArgs to HBM */
+    rc = rtMemcpy(dev_parallel_args, sizeof(ParallelAddArgs), &parallel_args,
+                  sizeof(ParallelAddArgs), RT_MEMCPY_HOST_TO_DEVICE);
     if (rc != 0) {
-        std::cerr << "rtMemcpy ScaleArgs failed: " << rc << '\n';
-        rtFree(dev_scale_args);
+        std::cerr << "rtMemcpy ParallelAddArgs failed: " << rc << '\n';
+        rtFree(dev_parallel_args);
         soInfo.Finalize();
         rtFree(dev_output);
-        rtFree(dev_input);
-        delete[] host_input;
+        rtFree(dev_input_a);
+        rtFree(dev_input_b);
+        delete[] host_input_a;
+        delete[] host_input_b;
         delete[] host_output;
         rtStreamDestroy(stream);
         rtDeviceReset(0);
@@ -330,16 +389,18 @@ int main() {
     DeviceArgs deviceArgs{};
     deviceArgs.aicpuSoBin = soInfo.aicpuSoBin;
     deviceArgs.aicpuSoLen = soInfo.aicpuSoLen;
-    deviceArgs.customArgsPtr = reinterpret_cast<uint64_t>(dev_scale_args);
+    deviceArgs.customArgsPtr = reinterpret_cast<uint64_t>(dev_parallel_args);
 
     rc = kernelArgs.InitDeviceArgs(deviceArgs);
     if (rc != 0) {
         std::cerr << "InitDeviceArgs failed: " << rc << '\n';
-        rtFree(dev_scale_args);
+        rtFree(dev_parallel_args);
         soInfo.Finalize();
         rtFree(dev_output);
-        rtFree(dev_input);
-        delete[] host_input;
+        rtFree(dev_input_a);
+        rtFree(dev_input_b);
+        delete[] host_input_a;
+        delete[] host_input_b;
         delete[] host_output;
         rtStreamDestroy(stream);
         rtDeviceReset(0);
@@ -353,31 +414,41 @@ int main() {
     rc = LaunchAiCpuKernel(stream, &kernelArgs, "DynTileFwkKernelServerInit", 1);
     if (rc != 0) {
         std::cerr << "Launch init kernel failed: " << rc << '\n';
-        rtFree(dev_scale_args);
+        rtFree(dev_parallel_args);
         kernelArgs.FinalizeDeviceArgs();
         soInfo.Finalize();
         rtFree(dev_output);
-        rtFree(dev_input);
-        delete[] host_input;
+        rtFree(dev_input_a);
+        rtFree(dev_input_b);
+        delete[] host_input_a;
+        delete[] host_input_b;
         delete[] host_output;
         rtStreamDestroy(stream);
         rtDeviceReset(0);
         return rc;
     }
 
-    /* Step 10: Launch main kernel
+    /* Step 10: Launch main kernel with 4 cores
      * Hardware dispatch phase 2: AICPU executes DynTileFwkKernelServer
      * which performs actual computation. Uses custom args extracted during init.
-     * Runs on one AICPU core (aicpuNum=1). */
-    rc = LaunchAiCpuKernel(stream, &kernelArgs, "DynTileFwkKernelServer", 1);
+     * Runs on 4 AICPU cores in parallel (aicpuNum=4) - hardware maximum.
+     *
+     * Hardware behavior: Runtime spawns 4 threads, one per ARM Cortex-A55 core.
+     * Each thread executes the same kernel function, uses thread ID to partition work.
+     *
+     * NOTE: This is EDUCATIONAL - production uses AICore for compute (examples 09-18).
+     * AICPU should control AICore, not perform computation itself. */
+    rc = LaunchAiCpuKernel(stream, &kernelArgs, "DynTileFwkKernelServer", 4);
     if (rc != 0) {
         std::cerr << "Launch main kernel failed: " << rc << '\n';
-        rtFree(dev_scale_args);
+        rtFree(dev_parallel_args);
         kernelArgs.FinalizeDeviceArgs();
         soInfo.Finalize();
         rtFree(dev_output);
-        rtFree(dev_input);
-        delete[] host_input;
+        rtFree(dev_input_a);
+        rtFree(dev_input_b);
+        delete[] host_input_a;
+        delete[] host_input_b;
         delete[] host_output;
         rtStreamDestroy(stream);
         rtDeviceReset(0);
@@ -403,7 +474,7 @@ int main() {
     /* Step 13: Verify results */
     int errors = 0;
     for (int i = 0; i < N; i++) {
-        float expected = host_input[i] * scale_args.scale;
+        float expected = host_input_a[i] + host_input_b[i];
         if (host_output[i] != expected) {
             if (errors < 3) {
                 std::cout << "Mismatch at " << i << ": expected " << expected
@@ -414,27 +485,30 @@ int main() {
     }
 
     if (errors == 0) {
-        std::cout << "PASS: All " << N << " elements correct (scale factor: "
-                 << scale_args.scale << ")\n";
-        std::cout << "  Input[0]  = " << host_input[0]
+        std::cout << "PASS: All " << N << " elements correct (4 cores)\n";
+        std::cout << "  Input_A[0]  = " << host_input_a[0]
+                 << ", Input_B[0]  = " << host_input_b[0]
                  << "  →  Output[0]  = " << host_output[0] << '\n';
-        std::cout << "  Input[N-1] = " << host_input[N-1]
+        std::cout << "  Input_A[N-1] = " << host_input_a[N-1]
+                 << ", Input_B[N-1] = " << host_input_b[N-1]
                  << "  →  Output[N-1] = " << host_output[N-1] << '\n';
     } else {
         std::cout << "FAIL: " << errors << " errors\n";
     }
 
     /* Step 14: Cleanup */
-    rtFree(dev_scale_args);
+    rtFree(dev_parallel_args);
     kernelArgs.FinalizeDeviceArgs();
     soInfo.Finalize();
     rtFree(dev_output);
-    rtFree(dev_input);
-    delete[] host_input;
+    rtFree(dev_input_b);
+    rtFree(dev_input_a);
+    delete[] host_input_b;
+    delete[] host_input_a;
     delete[] host_output;
     rtStreamDestroy(stream);
     rtDeviceReset(0);
 
-    std::cout << "\n=== End of AICPU Example ===\n";
+    std::cout << "\n=== End of AICPU Multi-threaded Example ===\n";
     return errors > 0 ? 1 : 0;
 }

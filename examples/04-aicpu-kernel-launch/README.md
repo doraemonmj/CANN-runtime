@@ -1,4 +1,4 @@
-# 04-aicpu-basic - AICPU Kernel Execution
+# 04-aicpu-kernel-launch - AICPU Kernel Execution
 
 Demonstrates AICPU kernel execution using the Runtime API backend server pattern.
 
@@ -101,7 +101,7 @@ cd ../..
 mkdir build && cd build
 cmake ..
 make
-./04-aicpu-basic
+./04-aicpu-kernel-launch
 ```
 
 ## Expected Output
@@ -145,4 +145,4 @@ PASS: All 1024 elements correct (scale factor: 2.5)
 
 ## Next Steps
 
-See [05-aicpu-aicore-sync](../05-aicpu-aicore-sync/) to learn about coordination between AICPU and AICore kernels.
+See [05-aicpu-multithread](../05-aicpu-multithread/) to learn about multi-core parallel execution using multiple AICPU cores.

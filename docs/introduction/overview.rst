@@ -106,8 +106,8 @@ This guide covers 18 progressive examples organized into four sections:
 
 **AICPU Programming (Examples 04-08)**
 
-- **04-aicpu-basic**: AICPU kernel execution with Runtime API
-- **05-aicpu-scale**: Complete AICPU launch workflow
+- **04-aicpu-kernel-launch**: AICPU kernel execution with Runtime API
+- **05-aicpu-multithread**: Multi-core parallel execution (8 AICPU cores)
 - **06-aicpu-logging**: Debug output and error handling
 - **07-aicpu-atomic**: Multi-core synchronization with atomics
 - **08-aicpu-queue**: Lock-free queues (SPSC/MPMC)

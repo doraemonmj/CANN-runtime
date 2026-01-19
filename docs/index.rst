@@ -79,7 +79,6 @@ Contents
 
    aicore/overview
    aicore/kernel-launch
-   aicore/calling-interface
    aicore/vector-unit/index
    aicore/cube-unit/index
    aicore/atomic

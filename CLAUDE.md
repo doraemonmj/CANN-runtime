@@ -100,6 +100,7 @@ Principles:
       xxx
       CMakeLists.txt
     ```
+    The aicore kernel is mainly for computing. The aicpu kernel is mainly for controlling aicore, no need to run compute tasks on aicpu. And you can use at most 4 aicpus and 24 aicores (24 aic + 48 aiv)
 2. The code can run with:
     ```bash
     cd examples/0x-xxx/
