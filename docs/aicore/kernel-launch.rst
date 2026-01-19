@@ -6,9 +6,8 @@ Launching AICORE kernels from host code.
 Overview
 --------
 
-This page covers the conceptual foundation of AICORE kernel launching. For practical examples,
-see the AICPU examples starting with :file:`examples/04-aicpu-kernel-launch/` which demonstrate real
-kernel loading and execution.
+This page covers AICORE kernel launching concepts and APIs. For a complete working example,
+see :file:`examples/09-aicore-basic/` which demonstrates AICORE kernel loading and execution.
 
 Kernel Format
 -------------

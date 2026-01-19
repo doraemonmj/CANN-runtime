@@ -6,7 +6,6 @@ Cube Unit (AIC) Programming
 
    l0l1-allocation
    compute
-   pipe-sync
 
 Overview
 --------

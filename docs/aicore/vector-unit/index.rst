@@ -6,7 +6,6 @@ Vector Unit (AIV) Programming
 
    ub-allocation
    compute
-   pipe-sync
 
 Overview
 --------

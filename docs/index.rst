@@ -69,6 +69,7 @@ Contents
 
    aicpu/overview
    aicpu/kernel-launch
+   aicpu/multithread
    aicpu/logging
    aicpu/atomic
    aicpu/queue

@@ -64,12 +64,12 @@ Examples progress from simple to complex, each building on previous concepts.
 | [03-stream](examples/03-stream/) | Asynchronous execution streams | [docs](docs/getting-started/streams.rst) | ✅ |
 | **AICPU Programming** | | | |
 | [04-aicpu-kernel-launch](examples/04-aicpu-kernel-launch/) | AICPU kernel execution with Runtime API (backend server pattern) | [docs](docs/aicpu/kernel-launch.rst) | ✅ |
-| [05-aicpu-multithread](examples/05-aicpu-multithread/) | Multi-core eval model (4 AICPU cores max) - educational only | [docs](docs/aicpu/kernel-launch.rst#multi-core-parallel-execution) | ✅ |
+| [05-aicpu-multithread](examples/05-aicpu-multithread/) | Multi-core eval model (4 AICPU cores max) - educational only | [docs](docs/aicpu/multithread.rst) | ✅ |
 | [06-aicpu-logging](examples/06-aicpu-logging/) | Debug output and error handling | [docs](docs/aicpu/logging.rst) | 🟢 |
 | [07-aicpu-atomic](examples/07-aicpu-atomic/) | Multi-core synchronization with atomics | [docs](docs/aicpu/atomic.rst) | 🟢 |
 | [08-aicpu-queue](examples/08-aicpu-queue/) | Lock-free queues (SPSC/MPMC) | [docs](docs/aicpu/queue.rst) | 🟢 |
 | **AICORE Programming** | | | |
-| [09-aicore-basic](examples/09-aicore-basic/) | AICORE architecture and execution model | [docs](docs/aicore/overview.rst) | 🟢 |
+| [09-aicore-basic](examples/09-aicore-basic/) | AICORE architecture and execution model | [docs](docs/aicore/kernel-launch.rst) | 🟢 |
 | [10-cube-matmul](examples/10-cube-matmul/) | Cube unit matrix multiplication (MMAD) | [docs](docs/aicore/cube-unit/compute.rst) | 🟢 |
 | [11-cube-memory](examples/11-cube-memory/) | L1/L0A/B/C buffer management for Cube | [docs](docs/aicore/cube-unit/l0l1-allocation.rst) | 🟢 |
 | [12-vector-simd](examples/12-vector-simd/) | Vector unit SIMD operations | [docs](docs/aicore/vector-unit/compute.rst) | 🟢 |
