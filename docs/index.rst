@@ -2,8 +2,7 @@ Ascend NPU Programming Guide
 =============================
 
 A practical guide to programming Huawei Ascend NPUs, focusing on hardware concepts
-and low-level interfaces. This guide teaches the same concepts as the CUDA Programming
-Guide, but for Ascend hardware.
+and low-level interfaces.
 
 .. note::
 
@@ -15,23 +14,27 @@ Quick Start
 
 .. code-block:: cpp
 
-   #include "platform.h"
+   #include <acl/acl.h>
 
    int main() {
-       // Initialize device
-       platform_init(0);
+       // Initialize ACL runtime
+       aclInit(nullptr);
+       aclrtSetDevice(0);
 
-       // Allocate device memory
-       void* dev_ptr = platform_malloc(1024);
+       // Allocate device memory (HBM)
+       void* dev_ptr = nullptr;
+       aclrtMalloc(&dev_ptr, 1024, ACL_MEM_MALLOC_HUGE_FIRST);
 
        // Copy data to device
-       platform_memcpy_h2d(dev_ptr, host_data, 1024);
+       aclrtMemcpy(dev_ptr, 1024, host_data, 1024,
+                   ACL_MEMCPY_HOST_TO_DEVICE);
 
-       // Launch kernel...
+       // Launch kernel (covered in later examples)...
 
        // Cleanup
-       platform_free(dev_ptr);
-       platform_shutdown();
+       aclrtFree(dev_ptr);
+       aclrtResetDevice(0);
+       aclFinalize();
    }
 
 Contents

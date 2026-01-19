@@ -1,7 +1,7 @@
 # Configuration file for the Sphinx documentation builder.
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
-project = 'simpler'
+project = 'Ascend NPU Programming Guide'
 copyright = '2024, OpenPTO'
 author = 'OpenPTO'
 release = '0.1.0'
@@ -16,7 +16,7 @@ extensions = [
 ]
 
 templates_path = ['_templates']
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', '.venv']
 
 # -- Options for HTML output -------------------------------------------------
 

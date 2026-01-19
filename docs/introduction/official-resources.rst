@@ -20,23 +20,9 @@ CANN (Compute Architecture for Neural Networks) is Huawei's software stack for A
    * - CANN Developer Guide
      - https://www.hiascend.com/document/detail/en/canncommercial/
    * - Ascend C Programming Guide
-     - https://www.hiascend.com/document/detail/en/canncommercial/700/operatordev/
+     - https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/850/opdevg/Ascendcopdevg/atlas_ascendc_map_10_0002.html
    * - ACL API Reference
-     - https://www.hiascend.com/document/detail/en/canncommercial/700/inferapplicationdev/
-
-Hardware Specifications
------------------------
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 70
-
-   * - Resource
-     - URL
-   * - Ascend 910 Specifications
-     - https://www.hiascend.com/hardware/product
-   * - Atlas Training Server
-     - https://e.huawei.com/en/products/computing/ascend
+     - https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/850/appdevg/acldevg/acldevg_0001.html
 
 Development Tools
 -----------------
@@ -59,17 +45,16 @@ Development Tools
 Community Resources
 -------------------
 
-- **Gitee**: https://gitee.com/ascend (official repositories)
-- **GitHub**: https://github.com/Ascend (mirrors and community)
-- **Forum**: https://www.hiascend.com/forum
+- **Ascend**: https://gitcode.com/ascend/
+- **CANN**: https://gitcode.com/cann
 
 Version Compatibility
 ---------------------
 
 This guide is written for:
 
-- **CANN Version**: 7.0+ / 8.0+
-- **Hardware**: Ascend 910A (A2), Ascend 910B/C (A3)
+- **CANN Version**: 8.5+
+- **Hardware**: Ascend 910B (A2), Ascend 910C (A3)
 - **Driver**: Matching CANN version
 
 .. note::
