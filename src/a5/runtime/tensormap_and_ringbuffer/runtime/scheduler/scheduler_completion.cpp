@@ -226,52 +226,18 @@ void SchedulerContext::check_running_cores_for_completion(
     auto &l2_perf = sched_l2_perf_[thread_idx];
 #endif
     CoreTracker &tracker = core_trackers_[thread_idx];
-
-    // Phase 1: collect every currently-running core into a stack array. Done
-    // in a single pop_first sweep over the BitStates copy (the local copy
-    // doesn't touch tracker.core_states_, so order is stable and no race with
-    // change_core_state below).
     auto running_core_states = tracker.get_all_running_cores();
-    int32_t bit_positions[CoreTracker::MAX_CORE_PER_THREAD];
-    int32_t core_ids[CoreTracker::MAX_CORE_PER_THREAD];
-    int32_t n_running = 0;
     while (running_core_states.has_value()) {
         int32_t bit_pos = running_core_states.pop_first();
-        bit_positions[n_running] = bit_pos;
-        core_ids[n_running] = tracker.get_core_id_by_offset(bit_pos);
-        n_running++;
-    }
-
-    // Phase 2: batched COND register reads — 8-way unroll. Mirrors
-    // cann/pypto's aicore_hal::GetFinishQueue pattern: gives the compiler /
-    // CPU pipeline the chance to issue multiple outstanding MMIO loads to
-    // different AICore addresses concurrently rather than serializing one at
-    // a time. Effective only if the Device memory type permits multiple
-    // outstanding loads; otherwise the loads still serialize and we get no
-    // measurable change (no regression — same total work).
-    uint32_t reg_vals[CoreTracker::MAX_CORE_PER_THREAD];
-    int32_t i = 0;
-    for (; i + 8 <= n_running; i += 8) {
-        reg_vals[i + 0] = *cond_ptrs_[core_ids[i + 0]];
-        reg_vals[i + 1] = *cond_ptrs_[core_ids[i + 1]];
-        reg_vals[i + 2] = *cond_ptrs_[core_ids[i + 2]];
-        reg_vals[i + 3] = *cond_ptrs_[core_ids[i + 3]];
-        reg_vals[i + 4] = *cond_ptrs_[core_ids[i + 4]];
-        reg_vals[i + 5] = *cond_ptrs_[core_ids[i + 5]];
-        reg_vals[i + 6] = *cond_ptrs_[core_ids[i + 6]];
-        reg_vals[i + 7] = *cond_ptrs_[core_ids[i + 7]];
-    }
-    for (; i < n_running; ++i) {
-        reg_vals[i] = *cond_ptrs_[core_ids[i]];
-    }
-
-    // Phase 3: process completions using cached reg_vals[].
-    for (int32_t idx = 0; idx < n_running; ++idx) {
-        int32_t bit_pos = bit_positions[idx];
-        int32_t core_id = core_ids[idx];
+        int32_t core_id = tracker.get_core_id_by_offset(bit_pos);
         CoreExecState &core = core_exec_states_[core_id];
 
-        uint64_t reg_val = static_cast<uint64_t>(reg_vals[idx]);
+        // --- Judgment phase: read register, derive transition ---
+        // Hot loop: dereference precomputed COND pointer directly. Avoids the
+        // read_reg() function call + reg_offset() switch + add per poll. The
+        // pointer was set up once during handshake (see scheduler_cold_path.cpp
+        // assign loop next to core_exec_states_[i].reg_addr).
+        uint64_t reg_val = static_cast<uint64_t>(*cond_ptrs_[core_id]);
         int32_t reg_task_id = EXTRACT_TASK_ID(reg_val);
         int32_t reg_state = EXTRACT_TASK_STATE(reg_val);
 
