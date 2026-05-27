@@ -21,15 +21,24 @@
 #include "aicpu/platform_regs.h"
 #include "common/platform_config.h"
 
+// MMIO register access.
+//
+// read_reg (COND polling hot path): the result is only used to drive software
+// state (slot_state.task_state CAS), and `volatile` already enforces ordering
+// against other volatile MMIO accesses. The previous wrapping pair of
+// __sync_synchronize() (full DMB ISH) was overkill for the read direction.
+// cann/pypto's aicore_hal::GetFinishedTask uses the same bare-volatile pattern.
+//
+// write_reg: KEEP the full barriers. Dispatch flow writes the AICore task
+// payload to cacheable memory THEN writes the trigger register (MMIO). Without
+// a DMB before the register write, the payload-store may be observable to the
+// AICore AFTER the trigger — corrupting the just-dispatched task. (Verified:
+// dropping the write_reg barriers triggers golden-output mismatches across
+// 100-round runs.)
 uint64_t read_reg(uint64_t reg_base_addr, RegId reg) {
     uint32_t offset = reg_offset(reg);
     volatile uint32_t *ptr = reinterpret_cast<volatile uint32_t *>(reg_base_addr + offset);
-
-    __sync_synchronize();
-    uint64_t value = static_cast<uint64_t>(*ptr);
-    __sync_synchronize();
-
-    return value;
+    return static_cast<uint64_t>(*ptr);
 }
 
 void write_reg(uint64_t reg_base_addr, RegId reg, uint64_t value) {
