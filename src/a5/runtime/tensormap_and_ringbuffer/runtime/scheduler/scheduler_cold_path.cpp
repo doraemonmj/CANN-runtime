@@ -603,6 +603,7 @@ int32_t SchedulerContext::handshake_all_cores(Runtime *runtime) {
         CoreType type = hank->core_type;
 
         core_exec_states_[i].reg_addr = reg_addr;
+        cond_ptrs_[i] = get_cond_reg_ptr(reg_addr);
 
 #if PTO2_PROFILING
         physical_core_ids_[i] = physical_core_id;

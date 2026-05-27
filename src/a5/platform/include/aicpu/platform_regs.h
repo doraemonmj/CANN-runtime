@@ -80,6 +80,18 @@ uint64_t read_reg(uint64_t reg_base_addr, RegId reg);
 void write_reg(uint64_t reg_base_addr, RegId reg, uint64_t value);
 
 /**
+ * Precompute the COND register pointer for an AICore.
+ *
+ * Used to avoid the reg_offset(RegId::COND) + addition (and on sim, the
+ * sparse_reg_ptr remapping) in the sched completion-poll hot path.
+ * Stash the result once at handshake; hot loop dereferences directly.
+ *
+ * @param reg_base_addr  Base address of the AICore's register block
+ * @return Pointer to the COND register (volatile uint32_t * for direct read)
+ */
+volatile uint32_t *get_cond_reg_ptr(uint64_t reg_base_addr);
+
+/**
  * Initialize AICore registers after core discovery
  *
  * This function performs platform-agnostic register initialization that works

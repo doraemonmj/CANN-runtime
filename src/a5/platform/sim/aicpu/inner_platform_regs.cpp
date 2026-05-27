@@ -44,3 +44,10 @@ void write_reg(uint64_t reg_base_addr, RegId reg, uint64_t value) {
     *ptr = static_cast<uint32_t>(value);
     __sync_synchronize();
 }
+
+// Precomputed COND register pointer (sim). Sim regs are paged with
+// sparse_reg_ptr() doing the offset remapping.
+volatile uint32_t *get_cond_reg_ptr(uint64_t reg_base_addr) {
+    volatile uint8_t *reg_base = reinterpret_cast<volatile uint8_t *>(reg_base_addr);
+    return reinterpret_cast<volatile uint32_t *>(sparse_reg_ptr(reg_base, reg_offset(RegId::COND)));
+}

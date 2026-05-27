@@ -117,6 +117,14 @@ private:
     // Per-core execution state, indexed by core_id (= worker_id)
     CoreExecState core_exec_states_[RUNTIME_MAX_WORKER];
 
+    // Precomputed COND register pointer per core_id. Populated at the same time
+    // as core_exec_states_[i].reg_addr during handshake/assign. The sched
+    // complete-phase hot loop dereferences these directly (`*cond_ptrs_[id]`),
+    // avoiding the read_reg() function call + reg_offset() switch + add per
+    // poll. Inspired by cann/pypto's `finishRegQueues_[idx]` precomputed array.
+    // Kept out of CoreExecState to preserve its 64B single-cache-line invariant.
+    volatile uint32_t *cond_ptrs_[RUNTIME_MAX_WORKER]{};
+
     // Cluster-ordered core trackers, one per scheduler thread
     CoreTracker core_trackers_[MAX_AICPU_THREADS];
 

@@ -49,3 +49,10 @@ void write_reg(uint64_t reg_base_addr, RegId reg, uint64_t value) {
     *ptr = static_cast<uint32_t>(value);
     __sync_synchronize();
 }
+
+// Precomputed COND register pointer (onboard). MMIO region maps each AICore
+// as 3MB of contiguous space; the COND register sits at REG_SPR_COND_OFFSET
+// from the base.
+volatile uint32_t *get_cond_reg_ptr(uint64_t reg_base_addr) {
+    return reinterpret_cast<volatile uint32_t *>(reg_base_addr + reg_offset(RegId::COND));
+}

@@ -233,7 +233,11 @@ void SchedulerContext::check_running_cores_for_completion(
         CoreExecState &core = core_exec_states_[core_id];
 
         // --- Judgment phase: read register, derive transition ---
-        uint64_t reg_val = read_reg(core.reg_addr, RegId::COND);
+        // Hot loop: dereference precomputed COND pointer directly. Avoids the
+        // read_reg() function call + reg_offset() switch + add per poll. The
+        // pointer was set up once during handshake (see scheduler_cold_path.cpp
+        // assign loop next to core_exec_states_[i].reg_addr).
+        uint64_t reg_val = static_cast<uint64_t>(*cond_ptrs_[core_id]);
         int32_t reg_task_id = EXTRACT_TASK_ID(reg_val);
         int32_t reg_state = EXTRACT_TASK_STATE(reg_val);
 
