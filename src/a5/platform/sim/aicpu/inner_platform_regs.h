@@ -9,8 +9,12 @@
  * -----------------------------------------------------------------------------------------------------------
  */
 /**
- * @file inner_platform_regs.cpp
- * @brief AICPU register read/write for simulation (a5sim)
+ * @file inner_platform_regs.h (sim)
+ * @brief MMIO register access — inline definitions for simulation (a5sim).
+ *
+ * Included by platform_regs.h; resolved via the sim aicpu include path
+ * (`platform/sim/aicpu/`). The onboard variant lives in
+ * `platform/onboard/aicpu/inner_platform_regs.h`.
  *
  * Simulated registers are three compact pages per core (16KB total):
  *   0x0000-0x0FFF -> page 0 (AICore SPR low: CTRL, DATA_MAIN_BASE)
@@ -19,35 +23,31 @@
  * sparse_reg_ptr() performs the offset remapping.
  */
 
+#ifndef PLATFORM_SIM_AICPU_INNER_PLATFORM_REGS_H_
+#define PLATFORM_SIM_AICPU_INNER_PLATFORM_REGS_H_
+
 #include <cstdint>
-#include "aicpu/platform_regs.h"
-#include "common/platform_config.h"
+#include "common/platform_config.h"  // RegId, reg_offset, sparse_reg_ptr
 
-uint64_t read_reg(uint64_t reg_base_addr, RegId reg) {
-    uint32_t offset = reg_offset(reg);
+inline uint64_t read_reg(uint64_t reg_base_addr, RegId reg) {
     volatile uint8_t *reg_base = reinterpret_cast<volatile uint8_t *>(reg_base_addr);
-    volatile uint32_t *ptr = reinterpret_cast<volatile uint32_t *>(sparse_reg_ptr(reg_base, offset));
-
-    __sync_synchronize();
-    uint64_t value = static_cast<uint64_t>(*ptr);
-    __sync_synchronize();
-
-    return value;
+    volatile uint32_t *ptr = reinterpret_cast<volatile uint32_t *>(sparse_reg_ptr(reg_base, reg_offset(reg)));
+    return static_cast<uint64_t>(*ptr);
 }
 
-void write_reg(uint64_t reg_base_addr, RegId reg, uint64_t value) {
-    uint32_t offset = reg_offset(reg);
+// See onboard variant for the rationale on keeping the __sync_synchronize
+// pair around the write.
+inline void write_reg(uint64_t reg_base_addr, RegId reg, uint64_t value) {
     volatile uint8_t *reg_base = reinterpret_cast<volatile uint8_t *>(reg_base_addr);
-    volatile uint32_t *ptr = reinterpret_cast<volatile uint32_t *>(sparse_reg_ptr(reg_base, offset));
-
+    volatile uint32_t *ptr = reinterpret_cast<volatile uint32_t *>(sparse_reg_ptr(reg_base, reg_offset(reg)));
     __sync_synchronize();
     *ptr = static_cast<uint32_t>(value);
     __sync_synchronize();
 }
 
-// Precomputed COND register pointer (sim). Sim regs are paged with
-// sparse_reg_ptr() doing the offset remapping.
-volatile uint32_t *get_cond_reg_ptr(uint64_t reg_base_addr) {
+inline volatile uint32_t *get_cond_reg_ptr(uint64_t reg_base_addr) {
     volatile uint8_t *reg_base = reinterpret_cast<volatile uint8_t *>(reg_base_addr);
     return reinterpret_cast<volatile uint32_t *>(sparse_reg_ptr(reg_base, reg_offset(RegId::COND)));
 }
+
+#endif  // PLATFORM_SIM_AICPU_INNER_PLATFORM_REGS_H_

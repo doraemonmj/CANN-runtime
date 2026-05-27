@@ -14,16 +14,21 @@
  *
  * Provides unified interface for:
  * 1. Platform register base address management (set/get_platform_regs)
- * 2. Register read/write operations (read_reg/write_reg)
+ * 2. Register read/write operations (read_reg/write_reg/get_cond_reg_ptr)
  *
  * The platform layer calls set_platform_regs() before aicpu_execute(),
- * and runtime code calls get_platform_regs() and read_reg/write_reg()
- * for register communication with AICore.
+ * and runtime code calls get_platform_regs() and the MMIO helpers for
+ * register communication with AICore.
  *
  * Implementation split:
- *   src/aicpu/platform_regs.cpp            -- shared: set/get_platform_regs, init/deinit, core count
- *   sim/aicpu/inner_platform_regs.cpp      -- read_reg/write_reg via sparse_reg_ptr (simulation)
- *   onboard/aicpu/inner_platform_regs.cpp  -- read_reg/write_reg via direct MMIO offset (hardware)
+ *   src/aicpu/platform_regs.cpp           -- shared: set/get_platform_regs, init/deinit, core count
+ *   sim/aicpu/inner_platform_regs.h       -- inline read_reg/write_reg/get_cond_reg_ptr (sim)
+ *   onboard/aicpu/inner_platform_regs.h   -- inline read_reg/write_reg/get_cond_reg_ptr (hardware)
+ *
+ * The platform-specific inner_platform_regs.h is included at the bottom of
+ * this header via the platform-aware include path (only the active platform's
+ * `platform/<onboard|sim>/aicpu/` is in -I), so all call sites pick up the
+ * right inline definitions and can fold reg_offset(RegId::*) at compile time.
  */
 
 #ifndef PLATFORM_AICPU_PLATFORM_REGS_H_
@@ -61,35 +66,10 @@ uint64_t get_platform_regs();
 }
 #endif
 
-/**
- * Read a register value from an AICore's register block
- *
- * @param reg_base_addr  Base address of the AICore's register block
- * @param reg            Register identifier (C++ enum class)
- * @return Register value (zero-extended to uint64_t)
- */
-uint64_t read_reg(uint64_t reg_base_addr, RegId reg);
-
-/**
- * Write a value to an AICore's register
- *
- * @param reg_base_addr  Base address of the AICore's register block
- * @param reg            Register identifier (C++ enum class)
- * @param value          Value to write (truncated to register width)
- */
-void write_reg(uint64_t reg_base_addr, RegId reg, uint64_t value);
-
-/**
- * Precompute the COND register pointer for an AICore.
- *
- * Used to avoid the reg_offset(RegId::COND) + addition (and on sim, the
- * sparse_reg_ptr remapping) in the sched completion-poll hot path.
- * Stash the result once at handshake; hot loop dereferences directly.
- *
- * @param reg_base_addr  Base address of the AICore's register block
- * @return Pointer to the COND register (volatile uint32_t * for direct read)
- */
-volatile uint32_t *get_cond_reg_ptr(uint64_t reg_base_addr);
+// read_reg / write_reg / get_cond_reg_ptr are defined as inline functions in
+// the platform-specific inner_platform_regs.h (included at the bottom of this
+// file). Keeping them inline lets call sites fold reg_offset(RegId::*) at
+// compile time and inline the MMIO load/store with no function-call overhead.
 
 /**
  * Initialize AICore registers after core discovery
@@ -148,5 +128,11 @@ void cache_invalidate_range(const void *addr, size_t size);
  * @param size  Size of the memory range in bytes
  */
 void cache_flush_range(const void *addr, size_t size);
+
+// Pull in the platform-specific inline MMIO helpers. Resolved via the active
+// platform's -I (`platform/onboard/aicpu/` or `platform/sim/aicpu/`). Must come
+// after RegId / reg_offset have been declared (via common/platform_config.h
+// at top of file).
+#include "inner_platform_regs.h"
 
 #endif  // PLATFORM_AICPU_PLATFORM_REGS_H_
